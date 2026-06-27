@@ -1,5 +1,4 @@
 import os
-import time
 import traceback
 import glob as globmod
 import telebot
@@ -33,12 +32,13 @@ def cleanup_dir():
         except:
             pass
 
-def get_newest_file(ext=None):
-    pattern = f'{DOWNLOAD_DIR}/*{ext}' if ext else f'{DOWNLOAD_DIR}/*'
-    files = [f for f in globmod.glob(pattern) if not f.endswith('.part')]
-    if not files:
-        return None
-    return max(files, key=os.path.getmtime)
+def get_newest_file(exclude_ext=None):
+    files = [f for f in globmod.glob(f'{DOWNLOAD_DIR}/*') 
+             if not f.endswith('.part') and (exclude_ext is None or not f.endswith(exclude_ext))]
+    return max(files, key=os.path.getmtime) if files else None
+
+def is_instagram(url):
+    return 'instagram.com' in url
 
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
@@ -52,7 +52,6 @@ def handle_link(message):
         return
 
     status_msg = bot.reply_to(message, "⏳ Обрабатываю ссылку...")
-
     cleanup_dir()
 
     ydl_opts = {
@@ -62,13 +61,29 @@ def handle_link(message):
         'merge_output_format': 'mp4',
     }
 
+    # Instagram требует cookies
+    if is_instagram(url):
+        ig_cookies = os.environ.get('INSTAGRAM_COOKIES')
+        if ig_cookies:
+            cookies_path = '/tmp/ig_cookies.txt'
+            with open(cookies_path, 'w') as f:
+                f.write(ig_cookies)
+            ydl_opts['cookiefile'] = cookies_path
+
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=True)
 
-        filename = get_newest_file()
+        # Берём путь из requested_downloads если есть
+        filename = None
+        if info.get('requested_downloads'):
+            filename = info['requested_downloads'][0].get('filepath')
+        
+        # Если не нашли — берём новейший файл
+        if not filename or not os.path.exists(filename):
+            filename = get_newest_file('.mp3')
 
-        if filename and os.path.exists(filename) and not filename.endswith('.mp3'):
+        if filename and os.path.exists(filename):
             encoded_url = url.replace('_', '-_-')
             keyboard = types.InlineKeyboardMarkup()
             keyboard.add(types.InlineKeyboardButton(
@@ -86,6 +101,7 @@ def handle_link(message):
             os.remove(filename)
             return
 
+        # Проверяем фото-галерею
         images = info.get('images', [])
         if not images and 'entries' in info:
             for entry in info.get('entries', []):
@@ -114,7 +130,6 @@ def handle_audio_callback(call):
     encoded_url = call.data.split('|', 1)[1]
     original_url = encoded_url.replace('-_-', '_')
     bot.answer_callback_query(call.id, "⏳ Извлекаю аудио...")
-
     cleanup_dir()
 
     ydl_opts = {
@@ -128,12 +143,20 @@ def handle_audio_callback(call):
         }],
     }
 
+    if is_instagram(original_url):
+        ig_cookies = os.environ.get('INSTAGRAM_COOKIES')
+        if ig_cookies:
+            cookies_path = '/tmp/ig_cookies.txt'
+            with open(cookies_path, 'w') as f:
+                f.write(ig_cookies)
+            ydl_opts['cookiefile'] = cookies_path
+
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.extract_info(original_url, download=True)
 
-        mp3 = get_newest_file('.mp3')
-        if mp3 and os.path.exists(mp3):
+        mp3 = get_newest_file()
+        if mp3 and mp3.endswith('.mp3') and os.path.exists(mp3):
             with open(mp3, 'rb') as audio:
                 bot.send_audio(call.message.chat.id, audio, caption="🎵 Вот твоя аудиодорожка!")
             os.remove(mp3)
