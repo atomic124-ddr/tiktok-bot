@@ -131,15 +131,16 @@ def handle_audio_callback(call):
     bot.answer_callback_query(call.id, "Извлекаю аудиодорожку...")
 
     ydl_opts = {
-        **BASE_YDL_OPTS,
-        'format': 'best',
-        'outtmpl': f'{DOWNLOAD_DIR}/audio_%(id)s.%(ext)s',
-        'postprocessors': [{
-            'key': 'FFmpegExtractAudio',
-            'preferredcodec': 'mp3',
-            'preferredquality': '192',
-        }],
-    }
+            **BASE_YDL_OPTS,
+            'quiet': False,
+            'format': 'bestaudio/best',
+            'outtmpl': f'{DOWNLOAD_DIR}/audio_%(id)s.%(ext)s',
+            'postprocessors': [{
+                'key': 'FFmpegExtractAudio',
+                'preferredcodec': 'mp3',
+                'preferredquality': '192',
+            }],
+        }
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
