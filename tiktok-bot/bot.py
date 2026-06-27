@@ -1,5 +1,4 @@
 import os
-import traceback
 import glob as globmod
 import telebot
 from telebot import types
@@ -31,7 +30,7 @@ def send_welcome(message):
     bot.reply_to(
         message,
         "Привет! Я мощный бот-загрузчик.\n\n"
-        "Отправь мне ссылку на TikTok, Instagram, YouTube или Shorts, "
+        "Отправь мне ссылку на TikTok (видео или фото-галерею), YouTube или Shorts, "
         "и я скачаю контент для тебя!"
     )
 
@@ -67,26 +66,26 @@ def handle_link(message):
             if filename:
                 bot.edit_message_text(
                     "Отправляю видео в Telegram...",
-                    chat_id=status_msg.chat_id,
+                    chat_id=status_msg.chat.id,
                     message_id=status_msg.message_id
                 )
 
                 encoded_url = url.replace('_', '-_-')
                 keyboard = types.InlineKeyboardMarkup()
                 keyboard.add(types.InlineKeyboardButton(
-                    text="🎵 Скачать аудио (MP3)",
+                    text="Скачать аудио (MP3)",
                     callback_data=f"audio|{encoded_url}"
                 ))
 
                 with open(filename, 'rb') as video:
                     bot.send_video(
-                        message.chat_id,
+                        message.chat.id,
                         video,
                         reply_markup=keyboard,
                         caption="Вот твое видео без водяного знака!"
                     )
 
-                bot.delete_message(status_msg.chat_id, status_msg.message_id)
+                bot.delete_message(status_msg.chat.id, status_msg.message_id)
                 os.remove(filename)
                 return
 
@@ -100,14 +99,14 @@ def handle_link(message):
             if images:
                 bot.edit_message_text(
                     "Обнаружена фото-галерея! Скачиваю фотографии...",
-                    chat_id=status_msg.chat_id,
+                    chat_id=status_msg.chat.id,
                     message_id=status_msg.message_id
                 )
                 media_group = [types.InputMediaPhoto(img_url) for img_url in images[:9]]
                 if media_group:
-                    bot.send_media_group(message.chat_id, media_group)
-                    bot.delete_message(status_msg.chat_id, status_msg.message_id)
-                    return
+                    bot.send_media_group(message.chat.id, media_group)
+                bot.delete_message(status_msg.chat.id, status_msg.message_id)
+                return
 
             raise Exception("Файл не найден и нет изображений")
 
@@ -116,11 +115,12 @@ def handle_link(message):
         try:
             bot.edit_message_text(
                 "Ошибка при обработке ссылки. Возможно, контент приватный или формат не поддерживается.",
-                chat_id=status_msg.chat_id,
+                chat_id=status_msg.chat.id,
                 message_id=status_msg.message_id
             )
         except Exception:
             pass
+
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('audio|'))
 def handle_audio_callback(call):
@@ -143,19 +143,18 @@ def handle_audio_callback(call):
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(original_url, download=True)
-            mp3_files = globmod.glob(f"{DOWNLOAD_DIR}/*.mp3")
-            audio_filename = mp3_files[0] if mp3_files else None
+            video_id = info.get('id', 'unknown')
+            audio_filename = f"{DOWNLOAD_DIR}/audio_{video_id}.mp3"
 
-            if audio_filename and os.path.exists(audio_filename):
+            if os.path.exists(audio_filename):
                 with open(audio_filename, 'rb') as audio:
-                    bot.send_audio(call.message.chat_id, audio, caption="Вот твоя аудиодорожка!")
+                    bot.send_audio(call.message.chat.id, audio, caption="Вот твоя аудиодорожка!")
                 os.remove(audio_filename)
             else:
-                bot.send_message(call.message.chat_id, "Не удалось найти или извлечь аудиофайл.")
+                bot.send_message(call.message.chat.id, "Не удалось найти или извлечь аудиофайл.")
     except Exception as e:
         print(f"Ошибка аудио: {e}")
-        print(traceback.format_exc())
-        bot.send_message(call.message.chat_id, "Ошибка при конвертации в MP3. Попробуйте другую ссылку.")
+        bot.send_message(call.message.chat.id, "Ошибка при конвертации в MP3. Попробуйте другую ссылку.")
 
 if __name__ == '__main__':
     bot.polling(none_stop=True)
