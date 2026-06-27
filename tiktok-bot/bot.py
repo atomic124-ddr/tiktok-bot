@@ -38,6 +38,12 @@ def handle_link(message):
 
     status_msg = bot.reply_to(message, "⏳ Обрабатываю ссылку...")
 
+    for f in globmod.glob(f'{DOWNLOAD_DIR}/*'):
+        try:
+            os.remove(f)
+        except:
+            pass
+
     ydl_opts = {
         **BASE_YDL_OPTS,
         'format': 'best[ext=mp4]/best',
