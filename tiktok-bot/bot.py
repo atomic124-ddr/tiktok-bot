@@ -131,7 +131,7 @@ def handle_audio_callback(call):
 
     ydl_opts = {
         **BASE_YDL_OPTS,
-        'format': 'bestaudio/best',
+        'format': 'bestaudio/best[ext=mp4]/best',
         'outtmpl': f'{DOWNLOAD_DIR}/audio_%(id)s.%(ext)s',
         'postprocessors': [{
             'key': 'FFmpegExtractAudio',
@@ -144,9 +144,13 @@ def handle_audio_callback(call):
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(original_url, download=True)
             video_id = info.get('id', 'unknown')
-            audio_filename = f"{DOWNLOAD_DIR}/audio_{video_id}.mp3"
+            audio_filename = find_downloaded_file(f"audio_{video_id}")
+            if not audio_filename or not audio_filename.endswith('.mp3'):
+                audio_pattern = os.path.join(DOWNLOAD_DIR, f"audio_{video_id}.mp3")
+                if os.path.exists(audio_pattern):
+                    audio_filename = audio_pattern
 
-            if os.path.exists(audio_filename):
+            if audio_filename and os.path.exists(audio_filename):
                 with open(audio_filename, 'rb') as audio:
                     bot.send_audio(call.message.chat.id, audio, caption="Вот твоя аудиодорожка!")
                 os.remove(audio_filename)
