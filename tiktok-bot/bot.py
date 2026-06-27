@@ -15,9 +15,11 @@ BASE_YDL_OPTS = {
     'no_warnings': True,
     'geo_bypass': True,
     'nocheckcertificate': True,
-    'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+    'http_headers': {
+        'User-Agent': 'Mozilla/5.0 (Linux; Android 11) AppleWebKit/537.36 Chrome/96.0.4664.45 Mobile Safari/537.36',
+    },
     'extractor_args': {
-        'youtube': {'player_client': ['web', 'web_creator']},
+        'youtube': {'player_client': ['android']},
         'tiktok': {'api_hostname': 'api22-normal-c-useast2a.tiktokv.com'},
     },
 }
@@ -43,6 +45,7 @@ def handle_link(message):
 
     ydl_opts = {
         **BASE_YDL_OPTS,
+        'format': 'best[ext=mp4]/best',
         'outtmpl': f'{DOWNLOAD_DIR}/%(id)s.%(ext)s',
         'merge_output_format': 'mp4',
     }
