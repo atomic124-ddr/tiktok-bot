@@ -145,9 +145,7 @@ def handle_audio_callback(call):
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(original_url, download=True)
             video_id = info.get('id', 'unknown')
-            mp3_files = globmod.glob(f"{DOWNLOAD_DIR}/audio_{video_id}*.mp3")
-            if not mp3_files:
-                mp3_files = globmod.glob(f"{DOWNLOAD_DIR}/*.mp3")
+            mp3_files = globmod.glob(f"{DOWNLOAD_DIR}/*.mp3")
             audio_filename = mp3_files[0] if mp3_files else None
 
             if audio_filename and os.path.exists(audio_filename):
