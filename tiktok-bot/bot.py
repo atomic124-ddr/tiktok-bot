@@ -8,6 +8,7 @@ from telebot import types
 import yt_dlp
 
 TOKEN = os.environ.get('TOKEN')
+PROXY_URL = os.environ.get('PROXY_URL', '')
 bot = telebot.TeleBot(TOKEN)
 
 DOWNLOAD_DIR = "downloads"
@@ -24,6 +25,9 @@ BASE_YDL_OPTS = {
     'retries': 3,
     'fragment_retries': 3,
 }
+
+if PROXY_URL:
+    BASE_YDL_OPTS['proxy'] = PROXY_URL
 
 def cleanup_dir():
     for f in globmod.glob(f'{DOWNLOAD_DIR}/*'):
