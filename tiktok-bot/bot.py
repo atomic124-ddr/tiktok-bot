@@ -11,23 +11,19 @@ TOKEN = os.environ.get('TOKEN')
 bot = telebot.TeleBot(TOKEN)
 
 DOWNLOAD_DIR = "downloads"
+COOKIES_DIR = "cookies"
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+os.makedirs(COOKIES_DIR, exist_ok=True)
 
 BASE_YDL_OPTS = {
     'quiet': True,
     'no_warnings': True,
     'geo_bypass': True,
     'nocheckcertificate': True,
-    'http_headers': {
-        'User-Agent': 'Mozilla/5.0 (Linux; Android 11) AppleWebKit/537.36 Chrome/96.0.4664.45 Mobile Safari/537.36',
-    },
-    'extractor_args': {
-        'youtube': {'player_client': ['android']},
-        'tiktok': {'api_hostname': 'api22-normal-c-useast2a.tiktokv.com'},
-    },
+    'socket_timeout': 30,
+    'retries': 3,
+    'fragment_retries': 3,
 }
-
-URL_CACHE_FILE = f'{DOWNLOAD_DIR}/url_cache.json'
 
 def cleanup_dir():
     for f in globmod.glob(f'{DOWNLOAD_DIR}/*'):
@@ -36,50 +32,90 @@ def cleanup_dir():
         except:
             pass
 
-def load_url_cache():
-    if os.path.exists(URL_CACHE_FILE):
-        try:
-            with open(URL_CACHE_FILE) as f:
-                return json.load(f)
-        except:
-            pass
-    return {}
-
-def save_url_cache(cache):
-    with open(URL_CACHE_FILE, 'w') as f:
-        json.dump(cache, f)
-
-def cache_url(short_id, url):
-    cache = load_url_cache()
-    cache[short_id] = url
-    if len(cache) > 100:
-        keys = list(cache.keys())
-        for k in keys[:50]:
-            del cache[k]
-    save_url_cache(cache)
-
-def get_cached_url(short_id):
-    return load_url_cache().get(short_id)
-
 def is_valid_url(url):
     return re.match(r'^https?://\S+$', url) is not None
 
 def is_instagram(url):
     return 'instagram.com' in url
 
-def get_ig_cookies_opts():
-    ig_cookies = os.environ.get('INSTAGRAM_COOKIES')
-    if ig_cookies:
-        cookies_path = '/tmp/ig_cookies.txt'
-        if not os.path.exists(cookies_path):
-            with open(cookies_path, 'w') as f:
-                f.write(ig_cookies)
-        return {'cookiefile': cookies_path}
-    return {}
+def is_tiktok(url):
+    return 'tiktok.com' in url
+
+def is_youtube(url):
+    return 'youtube.com' in url or 'youtu.be' in url
+
+def get_cookies_file(platform):
+    pattern = os.path.join(COOKIES_DIR, f'{platform}*.txt')
+    files = sorted(globmod.glob(pattern))
+    return files[0] if files else None
+
+def get_ydl_opts_for_url(url, audio_only=False):
+    opts = {**BASE_YDL_OPTS}
+
+    if is_instagram(url):
+        cookies = get_cookies_file('instagram')
+        if cookies:
+            opts['cookiefile'] = cookies
+        opts['http_headers'] = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36',
+        }
+        if audio_only:
+            opts['format'] = 'bestaudio/best'
+        else:
+            opts['format'] = 'best[height<=720][ext=mp4]/best[ext=mp4]/best[height<=720]/best'
+
+    elif is_tiktok(url):
+        cookies = get_cookies_file('tiktok')
+        if cookies:
+            opts['cookiefile'] = cookies
+        opts['http_headers'] = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36',
+        }
+        opts['extractor_args'] = {
+            'tiktok': {'api_hostname': 'api22-normal-c-useast2a.tiktokv.com'},
+        }
+        if audio_only:
+            opts['format'] = 'bestaudio/best'
+        else:
+            opts['format'] = 'best[ext=mp4]/best'
+
+    elif is_youtube(url):
+        opts['http_headers'] = {
+            'User-Agent': 'Mozilla/5.0 (Linux; Android 11) AppleWebKit/537.36 Chrome/96.0.4664.45 Mobile Safari/537.36',
+        }
+        opts['extractor_args'] = {
+            'youtube': {'player_client': ['android']},
+        }
+        if audio_only:
+            opts['format'] = 'bestaudio/best'
+        else:
+            opts['format'] = 'best[ext=mp4]/best'
+
+    else:
+        opts['http_headers'] = {
+            'User-Agent': 'Mozilla/5.0 (Linux; Android 11) AppleWebKit/537.36 Chrome/96.0.4664.45 Mobile Safari/537.36',
+        }
+        if audio_only:
+            opts['format'] = 'bestaudio/best'
+        else:
+            opts['format'] = 'best[ext=mp4]/best'
+
+    if audio_only:
+        opts['outtmpl'] = f'{DOWNLOAD_DIR}/audio_%(id)s.%(ext)s'
+        opts['postprocessors'] = [{
+            'key': 'FFmpegExtractAudio',
+            'preferredcodec': 'mp3',
+            'preferredquality': '192',
+        }]
+    else:
+        opts['outtmpl'] = f'{DOWNLOAD_DIR}/%(id)s.%(ext)s'
+        opts['merge_output_format'] = 'mp4'
+
+    return opts
 
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
-    bot.reply_to(message, "Привет! Отправь ссылку на TikTok, Instagram или YouTube Shorts — скачаю видео!")
+    bot.reply_to(message, "Привет! Отправь ссылку на TikTok, Instagram или YouTube — скачаю видео!")
 
 @bot.message_handler(func=lambda message: True)
 def handle_link(message):
@@ -91,13 +127,7 @@ def handle_link(message):
     status_msg = bot.reply_to(message, "⏳ Обрабатываю ссылку...")
     cleanup_dir()
 
-    ydl_opts = {
-        **BASE_YDL_OPTS,
-        'format': 'best[ext=mp4]/best',
-        'outtmpl': f'{DOWNLOAD_DIR}/%(id)s.%(ext)s',
-        'merge_output_format': 'mp4',
-    }
-    ydl_opts.update(get_ig_cookies_opts())
+    ydl_opts = get_ydl_opts_for_url(url, audio_only=False)
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -125,18 +155,17 @@ def handle_link(message):
         filename = files[0] if files else None
 
         if not filename or not os.path.exists(filename):
-            all_files = [f for f in globmod.glob(f'{DOWNLOAD_DIR}/*') if not f.endswith('.part') and not f.endswith('.json') and f != URL_CACHE_FILE]
+            all_files = [f for f in globmod.glob(f'{DOWNLOAD_DIR}/*')
+                        if not f.endswith('.part') and not f.endswith('.json')
+                        and os.path.basename(f) != 'url_cache.json']
             if all_files:
                 filename = max(all_files, key=os.path.getmtime)
 
         if filename and os.path.exists(filename):
-            short_id = video_id[:20]
-            cache_url(short_id, url)
-
             keyboard = types.InlineKeyboardMarkup()
             keyboard.add(types.InlineKeyboardButton(
                 text="🎵 Скачать аудио (MP3)",
-                callback_data=f"audio|{short_id}"
+                callback_data=f"audio|{video_id}"
             ))
 
             with open(filename, 'rb') as video:
@@ -161,34 +190,23 @@ def handle_link(message):
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('audio|'))
 def handle_audio_callback(call):
-    short_id = call.data.split('|', 1)[1]
-    original_url = get_cached_url(short_id)
+    video_id = call.data.split('|', 1)[1]
 
-    if not original_url or not is_valid_url(original_url):
-        bot.answer_callback_query(call.id, "❌ Ссылка устарела. Отправь заново.")
+    if not video_id or len(video_id) < 3:
+        bot.answer_callback_query(call.id, "❌ Некорректный ID.")
         return
 
     bot.answer_callback_query(call.id, "⏳ Извлекаю аудио...")
     cleanup_dir()
 
-    ydl_opts = {
-        **BASE_YDL_OPTS,
-        'format': 'bestaudio/best',
-        'outtmpl': f'{DOWNLOAD_DIR}/audio_%(id)s.%(ext)s',
-        'postprocessors': [{
-            'key': 'FFmpegExtractAudio',
-            'preferredcodec': 'mp3',
-            'preferredquality': '192',
-        }],
-    }
-    ydl_opts.update(get_ig_cookies_opts())
+    ydl_opts = get_ydl_opts_for_url(f"https://www.youtube.com/watch?v={video_id}", audio_only=True)
+    ydl_opts['outtmpl'] = f'{DOWNLOAD_DIR}/audio_{video_id}.%(ext)s'
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(original_url, download=True)
+            ydl.extract_info(f"https://www.youtube.com/watch?v={video_id}", download=True)
 
-        audio_id = info.get('id', '')
-        mp3_files = globmod.glob(f'{DOWNLOAD_DIR}/audio_{audio_id}.*')
+        mp3_files = globmod.glob(f'{DOWNLOAD_DIR}/audio_{video_id}.*')
         if not mp3_files:
             mp3_files = globmod.glob(f'{DOWNLOAD_DIR}/*.mp3')
 
