@@ -1,3 +1,4 @@
 # fixed
 pyTelegramBotAPI==4.25.0
 yt-dlp
+curl_cffi

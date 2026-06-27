@@ -6,6 +6,7 @@ import glob as globmod
 import telebot
 from telebot import types
 import yt_dlp
+from yt_dlp.networking.impersonate import ImpersonateTarget
 
 TOKEN = os.environ.get('TOKEN')
 PROXY_URL = os.environ.get('PROXY_URL', '')
@@ -24,6 +25,7 @@ BASE_YDL_OPTS = {
     'socket_timeout': 30,
     'retries': 3,
     'fragment_retries': 3,
+    'js_runtimes': {'node': {}},
 }
 
 if PROXY_URL:
@@ -60,6 +62,7 @@ def get_ydl_opts_for_url(url, audio_only=False):
         cookies = get_cookies_file('instagram')
         if cookies:
             opts['cookiefile'] = cookies
+        opts['impersonate'] = ImpersonateTarget(client='chrome', os='windows', os_version='10')
         opts['http_headers'] = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36',
         }
