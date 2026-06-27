@@ -1,4 +1,5 @@
 import os
+import glob as globmod
 import telebot
 from telebot import types
 import yt_dlp
@@ -33,6 +34,12 @@ def send_welcome(message):
         "и я скачаю контент для тебя!"
     )
 
+def find_downloaded_file(video_id):
+    pattern = os.path.join(DOWNLOAD_DIR, f"{video_id}.*")
+    matches = globmod.glob(pattern)
+    matches = [f for f in matches if not f.endswith('.part')]
+    return matches[0] if matches else None
+
 @bot.message_handler(func=lambda message: True)
 def handle_link(message):
     url = message.text.strip()
@@ -54,42 +61,20 @@ def handle_link(message):
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
 
-            entries = []
-            if 'entries' in info:
-                entries = list(info['entries'])
-            elif info.get('_type') == 'playlist':
-                entries = info.get('entries', [])
-
-            images = []
-            is_slideshow = False
-
-            if entries:
-                for entry in entries:
+            images = info.get('images', [])
+            if not images and 'entries' in info:
+                for entry in info.get('entries', []):
                     if entry and entry.get('images'):
                         images = entry['images']
-                        is_slideshow = True
                         break
-                if not is_slideshow and entries:
-                    first = entries[0]
-                    if first and first.get('images'):
-                        images = first['images']
-                        is_slideshow = True
 
-            if not is_slideshow and info.get('images'):
-                images = info['images']
-                is_slideshow = True
-
-            if is_slideshow and images:
+            if images:
                 bot.edit_message_text(
                     "Обнаружена фото-галерея! Скачиваю фотографии...",
                     chat_id=status_msg.chat.id,
                     message_id=status_msg.message_id
                 )
-
-                media_group = []
-                for img_url in images[:9]:
-                    media_group.append(types.InputMediaPhoto(img_url))
-
+                media_group = [types.InputMediaPhoto(img_url) for img_url in images[:9]]
                 if media_group:
                     bot.send_media_group(message.chat.id, media_group)
                 bot.delete_message(status_msg.chat.id, status_msg.message_id)
@@ -101,23 +86,12 @@ def handle_link(message):
                 message_id=status_msg.message_id
             )
 
-            file_info = ydl.extract_info(url, download=True)
-            filename = ydl.prepare_filename(file_info)
+            info = ydl.extract_info(url, download=True)
+            video_id = info.get('id', '')
+            filename = find_downloaded_file(video_id)
 
-            if not os.path.exists(filename):
-                base, _ = os.path.splitext(filename)
-                filename = base + ".mp4"
-
-            if not os.path.exists(filename):
-                base, _ = os.path.splitext(filename)
-                for ext in ['.webm', '.mkv', '.mov']:
-                    candidate = base + ext
-                    if os.path.exists(candidate):
-                        filename = candidate
-                        break
-
-            if not os.path.exists(filename):
-                raise Exception(f"Файл не найден после скачивания: {filename}")
+            if not filename:
+                raise Exception(f"Файл не найден после скачивания для id={video_id}")
 
             bot.edit_message_text(
                 "Отправляю видео в Telegram...",
@@ -127,11 +101,10 @@ def handle_link(message):
 
             encoded_url = url.replace('_', '-_-')
             keyboard = types.InlineKeyboardMarkup()
-            callback_button = types.InlineKeyboardButton(
+            keyboard.add(types.InlineKeyboardButton(
                 text="Скачать аудио (MP3)",
                 callback_data=f"audio|{encoded_url}"
-            )
-            keyboard.add(callback_button)
+            ))
 
             with open(filename, 'rb') as video:
                 bot.send_video(
