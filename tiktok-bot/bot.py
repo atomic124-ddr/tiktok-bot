@@ -3,141 +3,189 @@ import telebot
 from telebot import types
 import yt_dlp
 
-# Загружаем токен из переменных Railway
 TOKEN = os.environ.get('TOKEN')
 bot = telebot.TeleBot(TOKEN)
 
-# Папка для временных файлов
 DOWNLOAD_DIR = "downloads"
 if not os.path.exists(DOWNLOAD_DIR):
     os.makedirs(DOWNLOAD_DIR)
 
+BASE_YDL_OPTS = {
+    'quiet': True,
+    'no_warnings': True,
+    'geo_bypass': True,
+    'nocheckcertificate': True,
+    'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+    'extractor_args': {
+        'youtube': {'player_client': ['web', 'web_creator']},
+        'tiktok': {'api_hostname': 'api22-normal-c-useast2a.tiktokv.com'},
+    },
+}
+
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
     bot.reply_to(
-        message, 
+        message,
         "Привет! Я мощный бот-загрузчик.\n\n"
-        "🎬 Отправь мне ссылку на **TikTok** (видео или фото-галерею), **YouTube** или **Shorts**, "
+        "Отправь мне ссылку на TikTok (видео или фото-галерею), YouTube или Shorts, "
         "и я скачаю контент для тебя!"
     )
 
 @bot.message_handler(func=lambda message: True)
 def handle_link(message):
     url = message.text.strip()
-    
-    # Проверяем, что это ссылка
+
     if not url.startswith(("http://", "https://")):
         bot.reply_to(message, "Пожалуйста, отправь корректную ссылку.")
         return
 
-    status_msg = bot.reply_to(message, "⏳ Обрабатываю ссылку, подожди немного...")
+    status_msg = bot.reply_to(message, "Обрабатываю ссылку, подожди немного...")
 
-    # Настройки для yt-dlp
     ydl_opts = {
+        **BASE_YDL_OPTS,
         'outtmpl': f'{DOWNLOAD_DIR}/%(id)s.%(ext)s',
         'merge_output_format': 'mp4',
-        'quiet': True,
-        'no_warnings': True,
     }
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            # Извлекаем информацию о ссылке
             info = ydl.extract_info(url, download=False)
-            
-            # --- СЦЕНАРИЙ 1: ЭТО ФОТО-ГАЛЕРЕЯ TIKTOK ---
-            if 'entries' in info or (info.get('extractor') == 'tiktok' and not info.get('video_bytes') and info.get('images')):
-                bot.edit_message_text("📸 Обнаружена фото-галерея! Скачиваю фотографии...", chat_id=status_msg.chat.id, message_id=status_msg.message_id)
-                
-                images = info.get('images', [])
-                if not images and 'entries' in info:
-                    # Если ссылки внутри списка
-                    entry = info['entries'][0]
-                    images = entry.get('images', [])
 
-                if images:
-                    media_group = []
-                    for idx, img_url in enumerate(images[:9]): # Ограничение Telegram на 10 медиа в ряд
-                        media_group.append(types.InputMediaPhoto(img_url))
-                    
+            entries = []
+            if 'entries' in info:
+                entries = list(info['entries'])
+            elif info.get('_type') == 'playlist':
+                entries = info.get('entries', [])
+
+            images = []
+            is_slideshow = False
+
+            if entries:
+                for entry in entries:
+                    if entry and entry.get('images'):
+                        images = entry['images']
+                        is_slideshow = True
+                        break
+                if not is_slideshow and entries:
+                    first = entries[0]
+                    if first and first.get('images'):
+                        images = first['images']
+                        is_slideshow = True
+
+            if not is_slideshow and info.get('images'):
+                images = info['images']
+                is_slideshow = True
+
+            if is_slideshow and images:
+                bot.edit_message_text(
+                    "Обнаружена фото-галерея! Скачиваю фотографии...",
+                    chat_id=status_msg.chat.id,
+                    message_id=status_msg.message_id
+                )
+
+                media_group = []
+                for img_url in images[:9]:
+                    media_group.append(types.InputMediaPhoto(img_url))
+
+                if media_group:
                     bot.send_media_group(message.chat.id, media_group)
-                    bot.delete_message(status_msg.chat.id, status_msg.message_id)
-                    return
-                else:
-                    raise Exception("Не удалось извлечь фотографии.")
+                bot.delete_message(status_msg.chat.id, status_msg.message_id)
+                return
 
-            # --- СЦЕНАРИЙ 2: ЭТО ОБЫЧНОЕ ВИДЕО (TikTok, YouTube, Shorts) ---
-            bot.edit_message_text("📥 Скачиваю видео на сервер...", chat_id=status_msg.chat.id, message_id=status_msg.message_id)
-            
-            # Скачиваем файл на диск Railway
+            bot.edit_message_text(
+                "Скачиваю видео на сервер...",
+                chat_id=status_msg.chat.id,
+                message_id=status_msg.message_id
+            )
+
             file_info = ydl.extract_info(url, download=True)
             filename = ydl.prepare_filename(file_info)
-            
-            # Если yt-dlp изменил расширение при сборке (например, в mp4)
+
             if not os.path.exists(filename):
                 base, _ = os.path.splitext(filename)
                 filename = base + ".mp4"
 
-            bot.edit_message_text("🚀 Отправляю видео в Telegram...", chat_id=status_msg.chat.id, message_id=status_msg.message_id)
-            
-            # Создаем инлайн-кнопку для скачивания аудио
+            if not os.path.exists(filename):
+                base, _ = os.path.splitext(filename)
+                for ext in ['.webm', '.mkv', '.mov']:
+                    candidate = base + ext
+                    if os.path.exists(candidate):
+                        filename = candidate
+                        break
+
+            if not os.path.exists(filename):
+                raise Exception(f"Файл не найден после скачивания: {filename}")
+
+            bot.edit_message_text(
+                "Отправляю видео в Telegram...",
+                chat_id=status_msg.chat.id,
+                message_id=status_msg.message_id
+            )
+
+            encoded_url = url.replace('_', '-_-')
             keyboard = types.InlineKeyboardMarkup()
-            callback_button = types.InlineKeyboardButton(text="🎵 Скачать аудио (MP3)", callback_data=f"audio_{file_info['id']}")
+            callback_button = types.InlineKeyboardButton(
+                text="Скачать аудио (MP3)",
+                callback_data=f"audio|{encoded_url}"
+            )
             keyboard.add(callback_button)
 
-            # Отправляем видео пользователю
             with open(filename, 'rb') as video:
                 bot.send_video(
-                    message.chat.id, 
-                    video, 
-                    reply_markup=keyboard, 
+                    message.chat.id,
+                    video,
+                    reply_markup=keyboard,
                     caption="Вот твое видео без водяного знака!"
                 )
-            
-            # Удаляем статус-сообщение и временный файл видео
+
             bot.delete_message(status_msg.chat.id, status_msg.message_id)
             os.remove(filename)
 
     except Exception as e:
         print(f"Ошибка: {e}")
-        bot.edit_message_text(f"❌ Ошибка при обработке ссылки. Возможно, контент приватный или формат не поддерживается.", chat_id=status_msg.chat.id, message_id=status_msg.message_id)
+        try:
+            bot.edit_message_text(
+                "Ошибка при обработке ссылки. Возможно, контент приватный или формат не поддерживается.",
+                chat_id=status_msg.chat.id,
+                message_id=status_msg.message_id
+            )
+        except Exception:
+            pass
 
-# Обработчик нажатия на кнопку "Скачать аудио (MP3)"
-@bot.callback_query_handler(func=lambda call: call.data.startswith('audio_'))
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('audio|'))
 def handle_audio_callback(call):
-    video_id = call.data.replace('audio_', '')
-    bot.answer_callback_query(call.id, "⏳ Извлекаю аудиодорожку...")
-    
-    # Ищем видео заново по ID и качаем только звук
-    url = f"https://www.youtube.com/watch?v={video_id}" if len(video_id) == 11 else f"https://v.tiktok.com/{video_id}"
-    # Если это был прямой ID, проще использовать универсальный поиск yt-dlp по ID
-    url = f"ytsearch:{video_id}" if not url.startswith("http") else url
+    encoded_url = call.data.split('|', 1)[1]
+    original_url = encoded_url.replace('-_-', '_')
+
+    bot.answer_callback_query(call.id, "Извлекаю аудиодорожку...")
 
     ydl_opts = {
+        **BASE_YDL_OPTS,
         'format': 'bestaudio/best',
-        'outtmpl': f'{DOWNLOAD_DIR}/audio_{video_id}.%(ext)s',
+        'outtmpl': f'{DOWNLOAD_DIR}/audio_%(id)s.%(ext)s',
         'postprocessors': [{
             'key': 'FFmpegExtractAudio',
             'preferredcodec': 'mp3',
             'preferredquality': '192',
         }],
-        'quiet': True,
     }
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(f"https://www.youtube.com/watch?v={video_id}" if len(video_id)==11 else video_id, download=True)
-            # Из-за особенностей постпроцессора имя файла будет .mp3
+            info = ydl.extract_info(original_url, download=True)
+            video_id = info.get('id', 'unknown')
             audio_filename = f"{DOWNLOAD_DIR}/audio_{video_id}.mp3"
-            
+
             if os.path.exists(audio_filename):
                 with open(audio_filename, 'rb') as audio:
                     bot.send_audio(call.message.chat.id, audio, caption="Вот твоя аудиодорожка!")
                 os.remove(audio_filename)
             else:
-                bot.send_message(call.message.chat.id, "❌ Не удалось найти или извлечь аудиофайл.")
+                bot.send_message(call.message.chat.id, "Не удалось найти или извлечь аудиофайл.")
     except Exception as e:
-        bot.send_message(call.message.chat.id, "❌ Ошибка при конвертации в MP3. Попробуйте другую ссылку.")
+        print(f"Ошибка аудио: {e}")
+        bot.send_message(call.message.chat.id, "Ошибка при конвертации в MP3. Попробуйте другую ссылку.")
 
 if __name__ == '__main__':
     bot.polling(none_stop=True)
