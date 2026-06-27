@@ -129,10 +129,9 @@ def handle_audio_callback(call):
 
     bot.answer_callback_query(call.id, "Извлекаю аудиодорожку...")
 
-    is_youtube = 'youtube.com' in original_url or 'youtu.be' in original_url
     ydl_opts = {
         **BASE_YDL_OPTS,
-        'format': 'bestaudio/best' if is_youtube else 'best',
+        'format': 'bestaudio/best',
         'outtmpl': f'{DOWNLOAD_DIR}/audio_%(id)s.%(ext)s',
         'postprocessors': [{
             'key': 'FFmpegExtractAudio',
