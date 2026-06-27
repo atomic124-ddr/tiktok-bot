@@ -1,4 +1,5 @@
 import os
+import re
 import traceback
 import glob as globmod
 import telebot
@@ -40,6 +41,9 @@ def get_newest_file(exclude_ext=None):
 def is_instagram(url):
     return 'instagram.com' in url
 
+def is_valid_url(url):
+    return re.match(r'^https?://\S+$', url) is not None
+
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
     bot.reply_to(message, "Привет! Отправь ссылку на TikTok, Instagram или YouTube Shorts — скачаю видео!")
@@ -47,7 +51,7 @@ def send_welcome(message):
 @bot.message_handler(func=lambda message: True)
 def handle_link(message):
     url = message.text.strip()
-    if not url.startswith(("http://", "https://")):
+    if not is_valid_url(url):
         bot.reply_to(message, "Отправь корректную ссылку.")
         return
 
@@ -122,6 +126,11 @@ def handle_link(message):
 def handle_audio_callback(call):
     encoded_url = call.data.split('|', 1)[1]
     original_url = encoded_url.replace('-_-', '_')
+
+    if not is_valid_url(original_url):
+        bot.answer_callback_query(call.id, "❌ Некорректная ссылка.")
+        return
+
     bot.answer_callback_query(call.id, "⏳ Извлекаю аудио...")
     cleanup_dir()
 
