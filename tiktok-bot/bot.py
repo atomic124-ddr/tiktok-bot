@@ -1,4 +1,5 @@
 import os
+import traceback
 import glob as globmod
 import telebot
 from telebot import types
@@ -154,6 +155,7 @@ def handle_audio_callback(call):
                 bot.send_message(call.message.chat.id, "Не удалось найти или извлечь аудиофайл.")
     except Exception as e:
         print(f"Ошибка аудио: {e}")
+        print(traceback.format_exc())
         bot.send_message(call.message.chat.id, "Ошибка при конвертации в MP3. Попробуйте другую ссылку.")
 
 if __name__ == '__main__':
