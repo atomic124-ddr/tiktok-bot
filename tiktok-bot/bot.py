@@ -59,7 +59,35 @@ def handle_link(message):
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=False)
+            info = ydl.extract_info(url, download=True)
+            video_id = info.get('id', '')
+            filename = find_downloaded_file(video_id)
+
+            if filename:
+                bot.edit_message_text(
+                    "Отправляю видео в Telegram...",
+                    chat_id=status_msg.chat.id,
+                    message_id=status_msg.message_id
+                )
+
+                encoded_url = url.replace('_', '-_-')
+                keyboard = types.InlineKeyboardMarkup()
+                keyboard.add(types.InlineKeyboardButton(
+                    text="Скачать аудио (MP3)",
+                    callback_data=f"audio|{encoded_url}"
+                ))
+
+                with open(filename, 'rb') as video:
+                    bot.send_video(
+                        message.chat.id,
+                        video,
+                        reply_markup=keyboard,
+                        caption="Вот твое видео без водяного знака!"
+                    )
+
+                bot.delete_message(status_msg.chat.id, status_msg.message_id)
+                os.remove(filename)
+                return
 
             images = info.get('images', [])
             if not images and 'entries' in info:
@@ -80,42 +108,7 @@ def handle_link(message):
                 bot.delete_message(status_msg.chat.id, status_msg.message_id)
                 return
 
-            bot.edit_message_text(
-                "Скачиваю видео на сервер...",
-                chat_id=status_msg.chat.id,
-                message_id=status_msg.message_id
-            )
-
-            info = ydl.extract_info(url, download=True)
-            video_id = info.get('id', '')
-            filename = find_downloaded_file(video_id)
-
-            if not filename:
-                raise Exception(f"Файл не найден после скачивания для id={video_id}")
-
-            bot.edit_message_text(
-                "Отправляю видео в Telegram...",
-                chat_id=status_msg.chat.id,
-                message_id=status_msg.message_id
-            )
-
-            encoded_url = url.replace('_', '-_-')
-            keyboard = types.InlineKeyboardMarkup()
-            keyboard.add(types.InlineKeyboardButton(
-                text="Скачать аудио (MP3)",
-                callback_data=f"audio|{encoded_url}"
-            ))
-
-            with open(filename, 'rb') as video:
-                bot.send_video(
-                    message.chat.id,
-                    video,
-                    reply_markup=keyboard,
-                    caption="Вот твое видео без водяного знака!"
-                )
-
-            bot.delete_message(status_msg.chat.id, status_msg.message_id)
-            os.remove(filename)
+            raise Exception("Файл не найден и нет изображений")
 
     except Exception as e:
         print(f"Ошибка: {e}")
