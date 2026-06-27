@@ -1,4 +1,5 @@
 import os
+import time
 import traceback
 import glob as globmod
 import telebot
@@ -25,6 +26,20 @@ BASE_YDL_OPTS = {
     },
 }
 
+def cleanup_dir():
+    for f in globmod.glob(f'{DOWNLOAD_DIR}/*'):
+        try:
+            os.remove(f)
+        except:
+            pass
+
+def get_newest_file(ext=None):
+    pattern = f'{DOWNLOAD_DIR}/*{ext}' if ext else f'{DOWNLOAD_DIR}/*'
+    files = [f for f in globmod.glob(pattern) if not f.endswith('.part')]
+    if not files:
+        return None
+    return max(files, key=os.path.getmtime)
+
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
     bot.reply_to(message, "Привет! Отправь ссылку на TikTok, Instagram или YouTube Shorts — скачаю видео!")
@@ -38,11 +53,7 @@ def handle_link(message):
 
     status_msg = bot.reply_to(message, "⏳ Обрабатываю ссылку...")
 
-    for f in globmod.glob(f'{DOWNLOAD_DIR}/*'):
-        try:
-            os.remove(f)
-        except:
-            pass
+    cleanup_dir()
 
     ydl_opts = {
         **BASE_YDL_OPTS,
@@ -54,45 +65,42 @@ def handle_link(message):
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=True)
-            video_id = info.get('id', '')
 
-            files = globmod.glob(f'{DOWNLOAD_DIR}/{video_id}.*')
-            files = [f for f in files if not f.endswith('.part')]
-            filename = files[0] if files else None
+        filename = get_newest_file()
 
-            if filename and os.path.exists(filename):
-                encoded_url = url.replace('_', '-_-')
-                keyboard = types.InlineKeyboardMarkup()
-                keyboard.add(types.InlineKeyboardButton(
-                    text="🎵 Скачать аудио (MP3)",
-                    callback_data=f"audio|{encoded_url}"
-                ))
-                with open(filename, 'rb') as video:
-                    bot.send_video(
-                        message.chat.id,
-                        video,
-                        reply_markup=keyboard,
-                        caption="Вот твоё видео!"
-                    )
+        if filename and os.path.exists(filename) and not filename.endswith('.mp3'):
+            encoded_url = url.replace('_', '-_-')
+            keyboard = types.InlineKeyboardMarkup()
+            keyboard.add(types.InlineKeyboardButton(
+                text="🎵 Скачать аудио (MP3)",
+                callback_data=f"audio|{encoded_url}"
+            ))
+            with open(filename, 'rb') as video:
+                bot.send_video(
+                    message.chat.id,
+                    video,
+                    reply_markup=keyboard,
+                    caption="Вот твоё видео!"
+                )
+            bot.delete_message(status_msg.chat.id, status_msg.message_id)
+            os.remove(filename)
+            return
+
+        images = info.get('images', [])
+        if not images and 'entries' in info:
+            for entry in info.get('entries', []):
+                if entry and entry.get('images'):
+                    images = entry['images']
+                    break
+
+        if images:
+            media_group = [types.InputMediaPhoto(img_url) for img_url in images[:9]]
+            if media_group:
+                bot.send_media_group(message.chat.id, media_group)
                 bot.delete_message(status_msg.chat.id, status_msg.message_id)
-                os.remove(filename)
                 return
 
-            images = info.get('images', [])
-            if not images and 'entries' in info:
-                for entry in info.get('entries', []):
-                    if entry and entry.get('images'):
-                        images = entry['images']
-                        break
-
-            if images:
-                media_group = [types.InputMediaPhoto(img_url) for img_url in images[:9]]
-                if media_group:
-                    bot.send_media_group(message.chat.id, media_group)
-                    bot.delete_message(status_msg.chat.id, status_msg.message_id)
-                    return
-
-            bot.edit_message_text("❌ Не удалось скачать.", chat_id=status_msg.chat.id, message_id=status_msg.message_id)
+        bot.edit_message_text("❌ Не удалось скачать.", chat_id=status_msg.chat.id, message_id=status_msg.message_id)
 
     except Exception as e:
         print(traceback.format_exc())
@@ -106,6 +114,8 @@ def handle_audio_callback(call):
     encoded_url = call.data.split('|', 1)[1]
     original_url = encoded_url.replace('-_-', '_')
     bot.answer_callback_query(call.id, "⏳ Извлекаю аудио...")
+
+    cleanup_dir()
 
     ydl_opts = {
         **BASE_YDL_OPTS,
@@ -121,13 +131,14 @@ def handle_audio_callback(call):
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.extract_info(original_url, download=True)
-            mp3_files = globmod.glob(f'{DOWNLOAD_DIR}/*.mp3')
-            if mp3_files:
-                with open(mp3_files[0], 'rb') as audio:
-                    bot.send_audio(call.message.chat.id, audio, caption="🎵 Вот твоя аудиодорожка!")
-                os.remove(mp3_files[0])
-            else:
-                bot.send_message(call.message.chat.id, "❌ Не удалось найти MP3 файл.")
+
+        mp3 = get_newest_file('.mp3')
+        if mp3 and os.path.exists(mp3):
+            with open(mp3, 'rb') as audio:
+                bot.send_audio(call.message.chat.id, audio, caption="🎵 Вот твоя аудиодорожка!")
+            os.remove(mp3)
+        else:
+            bot.send_message(call.message.chat.id, "❌ Не удалось найти MP3.")
     except Exception as e:
         print(traceback.format_exc())
         bot.send_message(call.message.chat.id, "❌ Ошибка при конвертации в MP3.")
