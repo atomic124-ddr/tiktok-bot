@@ -131,7 +131,7 @@ def handle_audio_callback(call):
 
     ydl_opts = {
         **BASE_YDL_OPTS,
-        'format': 'bestaudio/best[ext=m4a]/bestaudio/best[ext=mp3]/best',
+        'format': 'best',
         'outtmpl': f'{DOWNLOAD_DIR}/audio_%(id)s.%(ext)s',
         'postprocessors': [{
             'key': 'FFmpegExtractAudio',
