@@ -74,14 +74,7 @@ def handle_link(message):
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=True)
 
-        # Берём путь из requested_downloads если есть
-        filename = None
-        if info.get('requested_downloads'):
-            filename = info['requested_downloads'][0].get('filepath')
-        
-        # Если не нашли — берём новейший файл
-        if not filename or not os.path.exists(filename):
-            filename = get_newest_file('.mp3')
+        filename = get_newest_file('.mp3')
 
         if filename and os.path.exists(filename):
             encoded_url = url.replace('_', '-_-')
