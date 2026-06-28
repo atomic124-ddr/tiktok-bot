@@ -8,6 +8,6 @@
 .instagram.com	TRUE	/	TRUE	1817158430	ps_n	1
 .instagram.com	TRUE	/	TRUE	1814134457	sessionid	54400330494%3AXC1XskfoevSxPB%3A22%3AAYhSGmXpKxzQ2S8yhdwPqw7CNGi8ZUwAEuv3OIBX_A
 .instagram.com	TRUE	/	TRUE	1783203266	wd	1366x643
-.instagram.com	TRUE	/	TRUE	1817159901	csrftoken	aq2lYZngV_5VIvP5kodUid
-.instagram.com	TRUE	/	TRUE	0	rur	"HIL\05454400330494\0541814135901:01ffae2a7884574303e976be0ba6fbff55c4a08e6a280a3d5caf0d399eda50abbff46655"
-.instagram.com	TRUE	/	TRUE	1790375901	ds_user_id	54400330494
+.instagram.com	TRUE	/	TRUE	1817195843	csrftoken	aq2lYZngV_5VIvP5kodUid
+.instagram.com	TRUE	/	TRUE	0	rur	UCO,54400330494,1814171843:01ff639d6c001027993e1e3bdbdbc998b8aff1e57c97bc9cd277303aa168fee629ae5178
+.instagram.com	TRUE	/	TRUE	1790411843	ds_user_id	54400330494
