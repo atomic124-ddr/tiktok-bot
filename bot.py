@@ -16,6 +16,7 @@ bot = telebot.TeleBot(TOKEN)
 
 DOWNLOAD_DIR = "downloads"
 COOKIES_DIR = "cookies"
+URL_CACHE_FILE = f'{DOWNLOAD_DIR}/url_cache.json'
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 os.makedirs(COOKIES_DIR, exist_ok=True)
 
@@ -38,6 +39,27 @@ def cleanup_dir():
             os.remove(f)
         except:
             pass
+
+def save_url_cache(video_id, url):
+    cache = {}
+    if os.path.exists(URL_CACHE_FILE):
+        try:
+            with open(URL_CACHE_FILE) as f:
+                cache = json.load(f)
+        except:
+            pass
+    cache[video_id] = url
+    with open(URL_CACHE_FILE, 'w') as f:
+        json.dump(cache, f)
+
+def get_cached_url(video_id):
+    if os.path.exists(URL_CACHE_FILE):
+        try:
+            with open(URL_CACHE_FILE) as f:
+                return json.load(f).get(video_id)
+        except:
+            pass
+    return None
 
 def is_valid_url(url):
     return re.match(r'^https?://\S+$', url) is not None
@@ -239,6 +261,7 @@ def handle_link(message):
                 filename = max(all_files, key=os.path.getmtime)
 
         if filename and os.path.exists(filename):
+            save_url_cache(video_id, url)
             keyboard = types.InlineKeyboardMarkup()
             keyboard.add(types.InlineKeyboardButton(
                 text="🎵 Скачать аудио (MP3)",
@@ -305,13 +328,17 @@ def handle_audio_callback(call):
     bot.answer_callback_query(call.id, "⏳ Извлекаю аудио...")
     cleanup_dir()
 
+    # Get original URL from cache
+    original_url = get_cached_url(video_id)
+
     # Try YouTube first
     try:
-        ydl_opts = get_ydl_opts_for_url(f"https://www.youtube.com/watch?v={video_id}", audio_only=True)
+        yt_url = f"https://www.youtube.com/watch?v={video_id}"
+        ydl_opts = get_ydl_opts_for_url(yt_url, audio_only=True)
         ydl_opts['outtmpl'] = f'{DOWNLOAD_DIR}/audio_{video_id}.%(ext)s'
 
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            ydl.extract_info(f"https://www.youtube.com/watch?v={video_id}", download=True)
+            ydl.extract_info(yt_url, download=True)
 
         mp3_files = globmod.glob(f'{DOWNLOAD_DIR}/audio_{video_id}.*')
         if not mp3_files:
@@ -325,7 +352,28 @@ def handle_audio_callback(call):
     except Exception:
         pass
 
-    # Try TikTok
+    # Try cached original URL
+    if original_url:
+        try:
+            ydl_opts = get_ydl_opts_for_url(original_url, audio_only=True)
+            ydl_opts['outtmpl'] = f'{DOWNLOAD_DIR}/audio_{video_id}.%(ext)s'
+
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                ydl.extract_info(original_url, download=True)
+
+            mp3_files = globmod.glob(f'{DOWNLOAD_DIR}/audio_{video_id}.*')
+            if not mp3_files:
+                mp3_files = globmod.glob(f'{DOWNLOAD_DIR}/*.mp3')
+
+            if mp3_files:
+                with open(mp3_files[0], 'rb') as audio:
+                    bot.send_audio(call.message.chat.id, audio, caption="🎵 Вот твоя аудиодорожка!")
+                os.remove(mp3_files[0])
+                return
+        except Exception:
+            pass
+
+    # Try TikTok fallback
     try:
         tiktok_url = f"https://www.tiktok.com/video/{video_id}"
         ydl_opts = get_ydl_opts_for_url(tiktok_url, audio_only=True)
