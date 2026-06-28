@@ -221,6 +221,8 @@ def send_welcome(message):
 @bot.message_handler(func=lambda message: True)
 def handle_link(message):
     url = message.text.strip()
+    print(f"[DEBUG] handle_link called with: {url}")
+    print(f"[DEBUG] is_instagram={is_instagram(url)} is_tiktok={is_tiktok(url)} is_youtube={is_youtube(url)}")
     if not is_valid_url(url):
         bot.reply_to(message, "Отправь корректную ссылку.")
         return
@@ -229,8 +231,10 @@ def handle_link(message):
     cleanup_dir()
 
     ydl_opts = get_ydl_opts_for_url(url, audio_only=False)
+    print(f"[DEBUG] ydl_opts: {ydl_opts}")
 
     try:
+        print(f"[DEBUG] Starting yt-dlp download...")
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
 
@@ -249,11 +253,13 @@ def handle_link(message):
                     return
 
             ydl.download([url])
+            print(f"[DEBUG] Download complete")
 
         video_id = info.get('id', '')
         files = globmod.glob(f'{DOWNLOAD_DIR}/{video_id}.*')
         files = [f for f in files if not f.endswith('.part')]
         filename = files[0] if files else None
+        print(f"[DEBUG] video_id={video_id} files={files} filename={filename}")
 
         if not filename or not os.path.exists(filename):
             all_files = [f for f in globmod.glob(f'{DOWNLOAD_DIR}/*')
@@ -284,10 +290,11 @@ def handle_link(message):
         bot.edit_message_text("❌ Не удалось скачать.", chat_id=status_msg.chat.id, message_id=status_msg.message_id)
 
     except Exception as e:
-        print(f"yt-dlp error: {e}")
+        print(f"[DEBUG] yt-dlp error: {e}")
         traceback.print_exc()
 
     if is_instagram(url):
+        print(f"[DEBUG] Trying Instagram direct API...")
         try:
             bot.edit_message_text("🔄 Пробую альтернативный способ...", chat_id=status_msg.chat.id, message_id=status_msg.message_id)
             filename, image_url, error = download_ig_direct(url)
