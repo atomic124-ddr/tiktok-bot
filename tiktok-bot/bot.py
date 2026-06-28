@@ -1,8 +1,10 @@
 import os
 import re
 import json
+import time
 import traceback
 import glob as globmod
+import requests as http_requests
 import telebot
 from telebot import types
 import yt_dlp
@@ -54,6 +56,75 @@ def get_cookies_file(platform):
     pattern = os.path.join(COOKIES_DIR, f'{platform}*.txt')
     files = sorted(globmod.glob(pattern))
     return files[0] if files else None
+
+def _sc_to_pk(sc):
+    A = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_'
+    pk = 0
+    for c in sc:
+        pk = pk * 64 + A.index(c)
+    return pk
+
+def _get_ig_session():
+    cookies_file = get_cookies_file('instagram')
+    if not cookies_file:
+        return None
+    ig_cookies = {}
+    with open(cookies_file) as f:
+        for line in f:
+            if line.startswith('#') or not line.strip():
+                continue
+            parts = line.strip().split('\t')
+            if len(parts) >= 7:
+                ig_cookies[parts[5]] = parts[6]
+    s = http_requests.Session()
+    for k, v in ig_cookies.items():
+        s.cookies.set(k, v, domain='.instagram.com')
+    ua = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36'
+    s.headers.update({
+        'User-Agent': ua,
+        'X-IG-App-ID': '936619743392459',
+        'X-ASBD-ID': '198387',
+        'X-IG-WWW-Claim': '0',
+        'Origin': 'https://www.instagram.com',
+        'Accept': '*/*',
+    })
+    r = s.get('https://www.instagram.com/', timeout=15)
+    csrf = s.cookies.get('csrftoken', '')
+    s.headers['X-CSRFToken'] = csrf
+    s.headers['X-Requested-With'] = 'XMLHttpRequest'
+    return s
+
+def download_ig_direct(url):
+    match = re.search(r'instagram\.com/(?:reel|p)/([A-Za-z0-9_-]+)', url)
+    if not match:
+        return None, None, "Invalid Instagram URL"
+    shortcode = match.group(1)
+    pk = _sc_to_pk(shortcode)
+    s = _get_ig_session()
+    if not s:
+        return None, None, "No Instagram cookies found"
+    time.sleep(2)
+    r = s.get(f'https://www.instagram.com/api/v1/media/{pk}/info/', timeout=15)
+    if r.status_code != 200:
+        return None, None, f"Instagram API error {r.status_code}"
+    data = r.json()
+    items = data.get('items', [])
+    if not items:
+        return None, None, "Post not found or private"
+    item = items[0]
+    if item.get('video_versions'):
+        v = item['video_versions'][0]
+        vr = s.get(v['url'], timeout=30)
+        if vr.status_code == 200:
+            filename = f'{DOWNLOAD_DIR}/{shortcode}.mp4'
+            with open(filename, 'wb') as f:
+                f.write(vr.content)
+            return filename, shortcode, None
+        return None, None, f"Video download failed {vr.status_code}"
+    images = item.get('image_versions2', {}).get('candidates', [])
+    if images:
+        return None, images[0]['url'], None
+    return None, None, "Unsupported media type"
 
 def get_ydl_opts_for_url(url, audio_only=False):
     opts = {**BASE_YDL_OPTS}
@@ -189,7 +260,36 @@ def handle_link(message):
         bot.edit_message_text("❌ Не удалось скачать.", chat_id=status_msg.chat.id, message_id=status_msg.message_id)
 
     except Exception as e:
-        print(traceback.format_exc())
+        print(f"yt-dlp error: {e}")
+
+    if is_instagram(url):
+        try:
+            bot.edit_message_text("🔄 Пробую альтернативный способ...", chat_id=status_msg.chat.id, message_id=status_msg.message_id)
+            filename, image_url, error = download_ig_direct(url)
+            if filename and os.path.exists(filename):
+                video_id = os.path.basename(filename).replace('.mp4', '')
+                keyboard = types.InlineKeyboardMarkup()
+                keyboard.add(types.InlineKeyboardButton(
+                    text="🎵 Скачать аудио (MP3)",
+                    callback_data=f"audio|{video_id}"
+                ))
+                with open(filename, 'rb') as video:
+                    bot.send_video(message.chat.id, video, reply_markup=keyboard, caption="Вот твоё видео!")
+                bot.delete_message(status_msg.chat.id, status_msg.message_id)
+                os.remove(filename)
+                return
+            if image_url:
+                bot.send_photo(message.chat.id, image_url)
+                bot.delete_message(status_msg.chat.id, status_msg.message_id)
+                return
+            bot.edit_message_text(f"❌ {error or 'Не удалось скачать.'}", chat_id=status_msg.chat.id, message_id=status_msg.message_id)
+        except Exception as e2:
+            print(traceback.format_exc())
+            try:
+                bot.edit_message_text("❌ Ошибка. Возможно контент приватный.", chat_id=status_msg.chat.id, message_id=status_msg.message_id)
+            except:
+                pass
+    else:
         try:
             bot.edit_message_text("❌ Ошибка. Возможно контент приватный.", chat_id=status_msg.chat.id, message_id=status_msg.message_id)
         except:
