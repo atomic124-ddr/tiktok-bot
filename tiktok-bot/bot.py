@@ -306,10 +306,11 @@ def handle_audio_callback(call):
     bot.answer_callback_query(call.id, "⏳ Извлекаю аудио...")
     cleanup_dir()
 
-    ydl_opts = get_ydl_opts_for_url(f"https://www.youtube.com/watch?v={video_id}", audio_only=True)
-    ydl_opts['outtmpl'] = f'{DOWNLOAD_DIR}/audio_{video_id}.%(ext)s'
-
+    # Try YouTube first
     try:
+        ydl_opts = get_ydl_opts_for_url(f"https://www.youtube.com/watch?v={video_id}", audio_only=True)
+        ydl_opts['outtmpl'] = f'{DOWNLOAD_DIR}/audio_{video_id}.%(ext)s'
+
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.extract_info(f"https://www.youtube.com/watch?v={video_id}", download=True)
 
@@ -321,11 +322,34 @@ def handle_audio_callback(call):
             with open(mp3_files[0], 'rb') as audio:
                 bot.send_audio(call.message.chat.id, audio, caption="🎵 Вот твоя аудиодорожка!")
             os.remove(mp3_files[0])
-        else:
-            bot.send_message(call.message.chat.id, "❌ Не удалось найти MP3.")
-    except Exception as e:
-        print(traceback.format_exc())
-        bot.send_message(call.message.chat.id, "❌ Ошибка при конвертации в MP3.")
+            return
+    except Exception:
+        pass
+
+    # Try Instagram direct API
+    try:
+        filename, image_url, error = download_ig_direct(f'https://www.instagram.com/reel/{video_id}/')
+        if filename and os.path.exists(filename):
+            # Use ffmpeg to extract audio from video
+            import subprocess
+            mp3_path = f'{DOWNLOAD_DIR}/audio_{video_id}.mp3'
+            subprocess.run([
+                'ffmpeg', '-i', filename, '-vn', '-acodec', 'libmp3lame',
+                '-q:a', '2', '-y', mp3_path
+            ], capture_output=True, timeout=30)
+
+            if os.path.exists(mp3_path):
+                with open(mp3_path, 'rb') as audio:
+                    bot.send_audio(call.message.chat.id, audio, caption="🎵 Вот твоя аудиодорожка!")
+                os.remove(mp3_path)
+                os.remove(filename)
+                return
+            else:
+                os.remove(filename)
+    except Exception:
+        pass
+
+    bot.send_message(call.message.chat.id, "❌ Ошибка при конвертации в MP3.")
 
 if __name__ == '__main__':
     bot.polling(none_stop=True)
