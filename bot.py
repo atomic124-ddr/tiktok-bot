@@ -120,19 +120,24 @@ def _get_ig_session():
 def download_ig_direct(url):
     match = re.search(r'instagram\.com/(?:reel|p)/([A-Za-z0-9_-]+)', url)
     if not match:
+        print(f"[DEBUG] IG: Invalid URL format: {url}")
         return None, None, "Invalid Instagram URL"
     shortcode = match.group(1)
+    print(f"[DEBUG] IG: shortcode={shortcode}")
     pk = _sc_to_pk(shortcode)
     s = _get_ig_session()
     if not s:
         return None, None, "No Instagram cookies found"
     time.sleep(2)
+    print(f"[DEBUG] IG: Calling API media/{pk}/info/")
     r = s.get(f'https://www.instagram.com/api/v1/media/{pk}/info/', timeout=15)
+    print(f"[DEBUG] IG: status={r.status_code} content-type={r.headers.get('content-type','?')}")
     if r.status_code != 200:
         return None, None, f"Instagram API error {r.status_code}"
     data = r.json()
     items = data.get('items', [])
     if not items:
+        print(f"[DEBUG] IG: No items in response")
         return None, None, "Post not found or private"
     item = items[0]
     if item.get('video_versions'):
