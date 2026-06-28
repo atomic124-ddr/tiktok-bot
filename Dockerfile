@@ -11,6 +11,6 @@ RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
 
 WORKDIR /app
 COPY requirements.txt .
-RUN pip install --no-cache-dir pyTelegramBotAPI yt-dlp
+RUN pip install --no-cache-dir pyTelegramBotAPI yt-dlp requests
 COPY . .
 CMD ["python", "bot.py"]
