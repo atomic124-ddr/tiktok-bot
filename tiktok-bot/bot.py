@@ -35,6 +35,8 @@ if PROXY_URL:
 
 def cleanup_dir():
     for f in globmod.glob(f'{DOWNLOAD_DIR}/*'):
+        if os.path.basename(f) == 'url_cache.json':
+            continue
         try:
             os.remove(f)
         except:
@@ -283,6 +285,7 @@ def handle_link(message):
 
     except Exception as e:
         print(f"yt-dlp error: {e}")
+        traceback.print_exc()
 
     if is_instagram(url):
         try:
