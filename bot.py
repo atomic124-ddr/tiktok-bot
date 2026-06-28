@@ -429,4 +429,7 @@ def handle_audio_callback(call):
     bot.send_message(call.message.chat.id, "❌ Ошибка при конвертации в MP3.")
 
 if __name__ == '__main__':
+    print("[BOT] Starting bot...")
+    print(f"[BOT] Python: {__import__('sys').version}")
+    print(f"[BOT] yt-dlp: {__import__('yt_dlp').version.__version__}")
     bot.polling(none_stop=True)
