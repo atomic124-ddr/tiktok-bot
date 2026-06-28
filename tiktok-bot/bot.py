@@ -186,6 +186,9 @@ def get_ydl_opts_for_url(url, audio_only=False):
             opts['format'] = 'best[ext=mp4]/best'
 
     elif is_youtube(url):
+        cookies = get_cookies_file('youtube')
+        if cookies:
+            opts['cookiefile'] = cookies
         opts['http_headers'] = {
             'User-Agent': 'Mozilla/5.0 (Linux; Android 11) AppleWebKit/537.36 Chrome/96.0.4664.45 Mobile Safari/537.36',
         }
