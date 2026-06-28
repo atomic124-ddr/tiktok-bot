@@ -27,7 +27,6 @@ BASE_YDL_OPTS = {
     'socket_timeout': 30,
     'retries': 3,
     'fragment_retries': 3,
-    'js_runtimes': {'node': {}},
 }
 
 if PROXY_URL:
@@ -326,11 +325,31 @@ def handle_audio_callback(call):
     except Exception:
         pass
 
+    # Try TikTok
+    try:
+        tiktok_url = f"https://www.tiktok.com/video/{video_id}"
+        ydl_opts = get_ydl_opts_for_url(tiktok_url, audio_only=True)
+        ydl_opts['outtmpl'] = f'{DOWNLOAD_DIR}/audio_{video_id}.%(ext)s'
+
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            ydl.extract_info(tiktok_url, download=True)
+
+        mp3_files = globmod.glob(f'{DOWNLOAD_DIR}/audio_{video_id}.*')
+        if not mp3_files:
+            mp3_files = globmod.glob(f'{DOWNLOAD_DIR}/*.mp3')
+
+        if mp3_files:
+            with open(mp3_files[0], 'rb') as audio:
+                bot.send_audio(call.message.chat.id, audio, caption="🎵 Вот твоя аудиодорожка!")
+            os.remove(mp3_files[0])
+            return
+    except Exception:
+        pass
+
     # Try Instagram direct API
     try:
         filename, image_url, error = download_ig_direct(f'https://www.instagram.com/reel/{video_id}/')
         if filename and os.path.exists(filename):
-            # Use ffmpeg to extract audio from video
             import subprocess
             mp3_path = f'{DOWNLOAD_DIR}/audio_{video_id}.mp3'
             subprocess.run([
