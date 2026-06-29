@@ -192,6 +192,7 @@ def get_ydl_opts_for_url(url, audio_only=False):
         opts['http_headers'] = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36',
         }
+        opts['js_runtimes'] = {'node': {}}
         if audio_only:
             opts['format'] = 'bestaudio/best'
         else:
