@@ -190,15 +190,15 @@ def get_ydl_opts_for_url(url, audio_only=False):
         if cookies:
             opts['cookiefile'] = cookies
         opts['http_headers'] = {
-            'User-Agent': 'Mozilla/5.0 (Linux; Android 11) AppleWebKit/537.36 Chrome/96.0.4664.45 Mobile Safari/537.36',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36',
         }
         opts['extractor_args'] = {
-            'youtube': {'player_client': ['android']},
+            'youtube': {'player_client': ['android', 'web']},
         }
         if audio_only:
             opts['format'] = 'bestaudio/best'
         else:
-            opts['format'] = 'best[ext=mp4]/best'
+            opts['format'] = 'best[ext=mp4]/best[height<=720]/best'
 
     else:
         opts['http_headers'] = {

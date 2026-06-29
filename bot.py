@@ -190,15 +190,15 @@ def get_ydl_opts_for_url(url, audio_only=False):
         if cookies:
             opts['cookiefile'] = cookies
         opts['http_headers'] = {
-            'User-Agent': 'Mozilla/5.0 (Linux; Android 11) AppleWebKit/537.36 Chrome/96.0.4664.45 Mobile Safari/537.36',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36',
         }
         opts['extractor_args'] = {
-            'youtube': {'player_client': ['android']},
+            'youtube': {'player_client': ['android', 'web']},
         }
         if audio_only:
             opts['format'] = 'bestaudio/best'
         else:
-            opts['format'] = 'best[ext=mp4]/best'
+            opts['format'] = 'best[ext=mp4]/best[height<=720]/best'
 
     else:
         opts['http_headers'] = {
@@ -300,6 +300,43 @@ def handle_link(message):
     except Exception as e:
         print(f"[DEBUG] yt-dlp error: {e}")
         traceback.print_exc()
+
+    if is_youtube(url):
+        print(f"[DEBUG] Retrying YouTube with android-only client...")
+        try:
+            retry_opts = get_ydl_opts_for_url(url, audio_only=False)
+            retry_opts['extractor_args'] = {
+                'youtube': {'player_client': ['android']},
+            }
+            with yt_dlp.YoutubeDL(retry_opts) as ydl:
+                info = ydl.extract_info(url, download=True)
+                video_id = info.get('id', '')
+                files = globmod.glob(f'{DOWNLOAD_DIR}/{video_id}.*')
+                files = [f for f in files if not f.endswith('.part')]
+                filename = files[0] if files else None
+
+                if not filename or not os.path.exists(filename):
+                    all_files = [f for f in globmod.glob(f'{DOWNLOAD_DIR}/*')
+                                if not f.endswith('.part') and not f.endswith('.json')
+                                and os.path.basename(f) != 'url_cache.json']
+                    if all_files:
+                        filename = max(all_files, key=os.path.getmtime)
+
+                if filename and os.path.exists(filename):
+                    save_url_cache(video_id, url)
+                    keyboard = types.InlineKeyboardMarkup()
+                    keyboard.add(types.InlineKeyboardButton(
+                        text="🎵 Скачать аудио (MP3)",
+                        callback_data=f"audio|{video_id}"
+                    ))
+                    with open(filename, 'rb') as video:
+                        bot.send_video(message.chat.id, video, reply_markup=keyboard, caption="Вот твоё видео!")
+                    bot.delete_message(status_msg.chat.id, status_msg.message_id)
+                    os.remove(filename)
+                    return
+        except Exception as e2:
+            print(f"[DEBUG] YouTube retry error: {e2}")
+            traceback.print_exc()
 
     if is_instagram(url):
         print(f"[DEBUG] Trying Instagram direct API...")
