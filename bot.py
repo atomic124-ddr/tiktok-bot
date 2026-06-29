@@ -192,13 +192,10 @@ def get_ydl_opts_for_url(url, audio_only=False):
         opts['http_headers'] = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36',
         }
-        opts['extractor_args'] = {
-            'youtube': {'player_client': ['android', 'web']},
-        }
         if audio_only:
             opts['format'] = 'bestaudio/best'
         else:
-            opts['format'] = 'best[ext=mp4]/best[height<=720]/best'
+            opts['format'] = 'bestvideo[ext=mp4][height<=1080]+bestaudio[ext=m4a]/bestvideo[height<=1080]+bestaudio/best[ext=mp4]/best'
 
     else:
         opts['http_headers'] = {
@@ -302,12 +299,13 @@ def handle_link(message):
         traceback.print_exc()
 
     if is_youtube(url):
-        print(f"[DEBUG] Retrying YouTube with android-only client...")
+        print(f"[DEBUG] Retrying YouTube with android fallback...")
         try:
             retry_opts = get_ydl_opts_for_url(url, audio_only=False)
             retry_opts['extractor_args'] = {
                 'youtube': {'player_client': ['android']},
             }
+            retry_opts['format'] = 'best[ext=mp4]/best'
             with yt_dlp.YoutubeDL(retry_opts) as ydl:
                 info = ydl.extract_info(url, download=True)
                 video_id = info.get('id', '')
