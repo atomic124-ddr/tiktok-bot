@@ -1,479 +1,282 @@
 import os
-import re
-import json
+import io
 import time
 import traceback
-import glob as globmod
-import requests as http_requests
+import subprocess
+import tempfile
+import cv2
+import numpy as np
+from PIL import Image
 import telebot
 from telebot import types
-import yt_dlp
-from yt_dlp.networking.impersonate import ImpersonateTarget
 
-TOKEN = os.environ.get('TOKEN')
-PROXY_URL = os.environ.get('PROXY_URL', '')
-bot = telebot.TeleBot(TOKEN)
+from config import TELEGRAM_TOKEN
 
-DOWNLOAD_DIR = "downloads"
-COOKIES_DIR = "cookies"
-URL_CACHE_FILE = f'{DOWNLOAD_DIR}/url_cache.json'
-os.makedirs(DOWNLOAD_DIR, exist_ok=True)
-os.makedirs(COOKIES_DIR, exist_ok=True)
+bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
-BASE_YDL_OPTS = {
-    'quiet': True,
-    'no_warnings': True,
-    'geo_bypass': True,
-    'nocheckcertificate': True,
-    'socket_timeout': 30,
-    'retries': 3,
-    'fragment_retries': 3,
+IMAGES_DIR = "images"
+os.makedirs(IMAGES_DIR, exist_ok=True)
+
+user_states = {}
+
+VIDEO_RESOLS = {
+    "720p": (1280, 720),
+    "1080p": (1920, 1080),
+    "1440p": (2560, 1440),
+    "4K": (3840, 2160),
+}
+VIDEO_FPS = {"30 fps": 30, "60 fps": 60, "120 fps": 120}
+PHOTO_RESOLS = {
+    "1080p": (1920, 1080),
+    "2K": (2560, 1440),
+    "4K": (3840, 2160),
 }
 
-if PROXY_URL:
-    BASE_YDL_OPTS['proxy'] = PROXY_URL
 
-def cleanup_dir():
-    for f in globmod.glob(f'{DOWNLOAD_DIR}/*'):
-        if os.path.basename(f) == 'url_cache.json':
-            continue
-        try:
-            os.remove(f)
-        except:
-            pass
+def upscale_image(image_bytes, target_w, target_h):
+    nparr = np.frombuffer(image_bytes, np.uint8)
+    img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+    if img is None:
+        raise Exception("Не удалось открыть изображение")
+    h, w = img.shape[:2]
+    interp = cv2.INTER_LANCZOS4 if (target_w * target_h) > (w * h * 4) else cv2.INTER_CUBIC
+    resized = cv2.resize(img, (target_w, target_h), interpolation=interp)
+    _, buf = cv2.imencode(".png", resized)
+    return buf.tobytes()
 
-def save_url_cache(video_id, url):
-    cache = {}
-    if os.path.exists(URL_CACHE_FILE):
-        try:
-            with open(URL_CACHE_FILE) as f:
-                cache = json.load(f)
-        except:
-            pass
-    cache[video_id] = url
-    with open(URL_CACHE_FILE, 'w') as f:
-        json.dump(cache, f)
 
-def get_cached_url(video_id):
-    if os.path.exists(URL_CACHE_FILE):
-        try:
-            with open(URL_CACHE_FILE) as f:
-                return json.load(f).get(video_id)
-        except:
-            pass
-    return None
+def process_video(input_path, output_path, target_w, target_h, target_fps):
+    cmd = [
+        "ffmpeg", "-y", "-i", input_path,
+        "-vf", f"scale={target_w}:{target_h}:flags=lanczos",
+        "-r", str(target_fps),
+        "-c:v", "libx264", "-preset", "fast", "-crf", "18",
+        "-pix_fmt", "yuv420p",
+        "-movflags", "+faststart",
+        output_path,
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+    if result.returncode != 0:
+        raise Exception(f"FFmpeg error: {result.stderr[:500]}")
+    return output_path
 
-def is_valid_url(url):
-    return re.match(r'^https?://\S+$', url) is not None
 
-def is_instagram(url):
-    return 'instagram.com' in url
+def get_file_from_telegram(bot_instance, file_id):
+    file_info = bot_instance.get_file(file_id)
+    downloaded = bot_instance.download_file(file_info.file_path)
+    return downloaded, file_info.file_path
 
-def is_tiktok(url):
-    return 'tiktok.com' in url
 
-def is_youtube(url):
-    return 'youtube.com' in url or 'youtu.be' in url
+@bot.message_handler(commands=["start"])
+def cmd_start(message):
+    user_states.pop(message.chat.id, None)
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("Фото", callback_data="mode_photo"),
+        types.InlineKeyboardButton("Видео", callback_data="mode_video"),
+    )
+    bot.send_message(
+        message.chat.id,
+        "Привет! Я бот для улучшения качества медиа.\n\n"
+        "Выбери, что хочешь улучшить:",
+        reply_markup=markup,
+    )
 
-def get_cookies_file(platform):
-    pattern = os.path.join(COOKIES_DIR, f'{platform}*.txt')
-    files = sorted(globmod.glob(pattern))
-    return files[0] if files else None
 
-def _sc_to_pk(sc):
-    A = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_'
-    pk = 0
-    for c in sc:
-        pk = pk * 64 + A.index(c)
-    return pk
+@bot.message_handler(commands=["help"])
+def cmd_help(message):
+    bot.send_message(
+        message.chat.id,
+        "Как пользоваться:\n\n"
+        "1. Нажми /start\n"
+        "2. Выбери Фото или Видео\n"
+        "3. Выбери целевое качество\n"
+        "4. Отправь медиафайл\n\n"
+        "Видео: до 4K, до 120fps\n"
+        "Фото: до 4K",
+    )
 
-def _get_ig_session():
-    cookies_file = get_cookies_file('instagram')
-    if not cookies_file:
-        return None
-    ig_cookies = {}
-    with open(cookies_file) as f:
-        for line in f:
-            if line.startswith('#') or not line.strip():
-                continue
-            parts = line.strip().split('\t')
-            if len(parts) >= 7:
-                ig_cookies[parts[5]] = parts[6]
-    s = http_requests.Session()
-    for k, v in ig_cookies.items():
-        s.cookies.set(k, v, domain='.instagram.com')
-    ua = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36'
-    s.headers.update({
-        'User-Agent': ua,
-        'X-IG-App-ID': '936619743392459',
-        'X-ASBD-ID': '198387',
-        'X-IG-WWW-Claim': '0',
-        'Origin': 'https://www.instagram.com',
-        'Accept': '*/*',
-    })
-    r = s.get('https://www.instagram.com/', timeout=15)
-    csrf = s.cookies.get('csrftoken', '')
-    s.headers['X-CSRFToken'] = csrf
-    s.headers['X-Requested-With'] = 'XMLHttpRequest'
-    return s
 
-def download_ig_direct(url):
-    match = re.search(r'instagram\.com/(?:reel|p)/([A-Za-z0-9_-]+)', url)
-    if not match:
-        print(f"[DEBUG] IG: Invalid URL format: {url}")
-        return None, None, "Invalid Instagram URL"
-    shortcode = match.group(1)
-    print(f"[DEBUG] IG: shortcode={shortcode}")
-    pk = _sc_to_pk(shortcode)
-    s = _get_ig_session()
-    if not s:
-        return None, None, "No Instagram cookies found"
-    time.sleep(2)
-    print(f"[DEBUG] IG: Calling API media/{pk}/info/")
-    r = s.get(f'https://www.instagram.com/api/v1/media/{pk}/info/', timeout=15)
-    print(f"[DEBUG] IG: status={r.status_code} content-type={r.headers.get('content-type','?')}")
-    if r.status_code != 200:
-        return None, None, f"Instagram API error {r.status_code}"
-    data = r.json()
-    items = data.get('items', [])
-    if not items:
-        print(f"[DEBUG] IG: No items in response")
-        return None, None, "Post not found or private"
-    item = items[0]
-    if item.get('video_versions'):
-        v = item['video_versions'][0]
-        vr = s.get(v['url'], timeout=30)
-        if vr.status_code == 200:
-            filename = f'{DOWNLOAD_DIR}/{shortcode}.mp4'
-            with open(filename, 'wb') as f:
-                f.write(vr.content)
-            return filename, shortcode, None
-        return None, None, f"Video download failed {vr.status_code}"
-    images = item.get('image_versions2', {}).get('candidates', [])
-    if images:
-        return None, images[0]['url'], None
-    return None, None, "Unsupported media type"
+@bot.callback_query_handler(func=lambda c: c.data == "mode_photo")
+def callback_photo(call):
+    chat_id = call.message.chat.id
+    user_states[chat_id] = {"mode": "photo"}
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    for label, (w, h) in PHOTO_RESOLS.items():
+        markup.add(types.InlineKeyboardButton(f"{label} ({w}x{h})", callback_data=f"photo_{label}"))
+    bot.edit_message_text("Выбери целевое разрешение для фото:", chat_id, call.message.message_id, reply_markup=markup)
 
-def get_ydl_opts_for_url(url, audio_only=False):
-    opts = {**BASE_YDL_OPTS}
 
-    if is_instagram(url):
-        cookies = get_cookies_file('instagram')
-        if cookies:
-            opts['cookiefile'] = cookies
-        opts['impersonate'] = ImpersonateTarget(client='chrome', os='windows', os_version='10')
-        opts['http_headers'] = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36',
-        }
-        if audio_only:
-            opts['format'] = 'bestaudio/best'
-        else:
-            opts['format'] = 'best[height<=720][ext=mp4]/best[ext=mp4]/best[height<=720]/best'
+@bot.callback_query_handler(func=lambda c: c.data == "mode_video")
+def callback_video_res(call):
+    chat_id = call.message.chat.id
+    user_states[chat_id] = {"mode": "video"}
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    for label, (w, h) in VIDEO_RESOLS.items():
+        markup.add(types.InlineKeyboardButton(f"{label} ({w}x{h})", callback_data=f"video_res_{label}"))
+    bot.edit_message_text("Выбери целевое разрешение для видео:", chat_id, call.message.message_id, reply_markup=markup)
 
-    elif is_tiktok(url):
-        cookies = get_cookies_file('tiktok')
-        if cookies:
-            opts['cookiefile'] = cookies
-        opts['http_headers'] = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36',
-        }
-        opts['extractor_args'] = {
-            'tiktok': {'api_hostname': 'api22-normal-c-useast2a.tiktokv.com'},
-        }
-        if audio_only:
-            opts['format'] = 'bestaudio/best'
-        else:
-            opts['format'] = 'best[ext=mp4]/best'
 
-    elif is_youtube(url):
-        cookies = get_cookies_file('youtube')
-        if cookies:
-            opts['cookiefile'] = cookies
-        opts['http_headers'] = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36',
-        }
-        opts['js_runtimes'] = {'node': {}}
-        if audio_only:
-            opts['format'] = 'bestaudio/best'
-        else:
-            opts['format'] = 'bestvideo[ext=mp4][height<=1080]+bestaudio[ext=m4a]/bestvideo[height<=1080]+bestaudio/best[ext=mp4]/best'
+@bot.callback_query_handler(func=lambda c: c.data.startswith("photo_"))
+def callback_photo_res(call):
+    chat_id = call.message.chat.id
+    res_label = call.data.replace("photo_", "")
+    w, h = PHOTO_RESOLS[res_label]
+    user_states[chat_id] = {"mode": "photo", "resolution": res_label, "size": (w, h)}
+    bot.edit_message_text(
+        f"Разрешение: {res_label} ({w}x{h})\n\nОтправь фото, которое нужно улучшить.",
+        chat_id, call.message.message_id,
+    )
 
-    else:
-        opts['http_headers'] = {
-            'User-Agent': 'Mozilla/5.0 (Linux; Android 11) AppleWebKit/537.36 Chrome/96.0.4664.45 Mobile Safari/537.36',
-        }
-        if audio_only:
-            opts['format'] = 'bestaudio/best'
-        else:
-            opts['format'] = 'best[ext=mp4]/best'
 
-    if audio_only:
-        opts['outtmpl'] = f'{DOWNLOAD_DIR}/audio_%(id)s.%(ext)s'
-        opts['postprocessors'] = [{
-            'key': 'FFmpegExtractAudio',
-            'preferredcodec': 'mp3',
-            'preferredquality': '192',
-        }]
-    else:
-        opts['outtmpl'] = f'{DOWNLOAD_DIR}/%(id)s.%(ext)s'
-        opts['merge_output_format'] = 'mp4'
+@bot.callback_query_handler(func=lambda c: c.data.startswith("video_res_"))
+def callback_video_res_pick(call):
+    chat_id = call.message.chat.id
+    res_label = call.data.replace("video_res_", "")
+    w, h = VIDEO_RESOLS[res_label]
+    user_states[chat_id] = {"mode": "video", "resolution": res_label, "size": (w, h)}
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    for fps_label, fps_val in VIDEO_FPS.items():
+        markup.add(types.InlineKeyboardButton(fps_label, callback_data=f"video_fps_{fps_label}"))
+    bot.edit_message_text(
+        f"Разрешение: {res_label} ({w}x{h})\n\nТеперь выбери FPS:",
+        chat_id, call.message.message_id, reply_markup=markup,
+    )
 
-    return opts
 
-@bot.message_handler(commands=['start'])
-def send_welcome(message):
-    bot.reply_to(message, "Привет! Отправь ссылку на TikTok, Instagram или YouTube — скачаю видео!")
+@bot.callback_query_handler(func=lambda c: c.data.startswith("video_fps_"))
+def callback_video_fps(call):
+    chat_id = call.message.chat.id
+    fps_label = call.data.replace("video_fps_", "")
+    fps_val = VIDEO_FPS[fps_label]
+    state = user_states.get(chat_id, {})
+    state["fps"] = fps_val
+    state["fps_label"] = fps_label
+    user_states[chat_id] = state
+    res = state.get("resolution", "?")
+    bot.edit_message_text(
+        f"Настройки: {res}, {fps_label}\n\nОтправь видео, которое нужно улучшить.",
+        chat_id, call.message.message_id,
+    )
 
-@bot.message_handler(func=lambda message: True)
-def handle_link(message):
-    url = message.text.strip()
-    print(f"[DEBUG] handle_link called with: {url}")
-    print(f"[DEBUG] is_instagram={is_instagram(url)} is_tiktok={is_tiktok(url)} is_youtube={is_youtube(url)}")
-    if not is_valid_url(url):
-        bot.reply_to(message, "Отправь корректную ссылку.")
+
+def handle_media_processing(message, file_bytes, is_video=False):
+    chat_id = message.chat.id
+    state = user_states.get(chat_id)
+    if not state:
+        bot.reply_to(message, "Сначала нажми /start и выбери режим.")
         return
 
-    status_msg = bot.reply_to(message, "⏳ Обрабатываю ссылку...")
-    cleanup_dir()
-
-    ydl_opts = get_ydl_opts_for_url(url, audio_only=False)
-    print(f"[DEBUG] ydl_opts: {ydl_opts}")
+    mode = state.get("mode")
+    status_msg = bot.reply_to(message, "Обрабатываю, подожди...")
 
     try:
-        print(f"[DEBUG] Starting yt-dlp download...")
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=False)
-
-            images = info.get('images', [])
-            if not images and 'entries' in info:
-                for entry in info.get('entries', []):
-                    if entry and entry.get('images'):
-                        images = entry['images']
-                        break
-
-            if images:
-                media_group = [types.InputMediaPhoto(img_url) for img_url in images[:9]]
-                if media_group:
-                    bot.send_media_group(message.chat.id, media_group)
-                    bot.delete_message(status_msg.chat.id, status_msg.message_id)
-                    return
-
-            ydl.download([url])
-            print(f"[DEBUG] Download complete")
-
-        video_id = info.get('id', '')
-        files = globmod.glob(f'{DOWNLOAD_DIR}/{video_id}.*')
-        files = [f for f in files if not f.endswith('.part')]
-        filename = files[0] if files else None
-        print(f"[DEBUG] video_id={video_id} files={files} filename={filename}")
-
-        if not filename or not os.path.exists(filename):
-            all_files = [f for f in globmod.glob(f'{DOWNLOAD_DIR}/*')
-                        if not f.endswith('.part') and not f.endswith('.json')
-                        and os.path.basename(f) != 'url_cache.json']
-            if all_files:
-                filename = max(all_files, key=os.path.getmtime)
-
-        if filename and os.path.exists(filename):
-            save_url_cache(video_id, url)
-            keyboard = types.InlineKeyboardMarkup()
-            keyboard.add(types.InlineKeyboardButton(
-                text="🎵 Скачать аудио (MP3)",
-                callback_data=f"audio|{video_id}"
-            ))
-
-            with open(filename, 'rb') as video:
-                bot.send_video(
-                    message.chat.id,
-                    video,
-                    reply_markup=keyboard,
-                    caption="Вот твоё видео!"
-                )
+        if mode == "photo":
+            w, h = state.get("size", (1920, 1080))
+            res_label = state.get("resolution", "1080p")
+            result = upscale_image(file_bytes, w, h)
             bot.delete_message(status_msg.chat.id, status_msg.message_id)
-            os.remove(filename)
-            return
+            bot.send_photo(chat_id, result, caption=f"Улучшено до {res_label} ({w}x{h})")
 
-        bot.edit_message_text("❌ Не удалось скачать.", chat_id=status_msg.chat.id, message_id=status_msg.message_id)
+        elif mode == "video":
+            w, h = state.get("size", (1920, 1080))
+            fps = state.get("fps", 30)
+            res_label = state.get("resolution", "1080p")
+            fps_label = state.get("fps_label", "30 fps")
+
+            with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp_in:
+                tmp_in.write(file_bytes)
+                tmp_in_path = tmp_in.name
+
+            tmp_out_path = tmp_in_path.replace(".mp4", "_out.mp4")
+            try:
+                process_video(tmp_in_path, tmp_out_path, w, h, fps)
+                with open(tmp_out_path, "rb") as f:
+                    result = f.read()
+                bot.delete_message(status_msg.chat.id, status_msg.message_id)
+                if len(result) <= 50 * 1024 * 1024:
+                    bot.send_video(chat_id, result, caption=f"Улучшено до {res_label} {fps_label}")
+                else:
+                    with open(tmp_out_path, "rb") as f:
+                        bot.send_document(chat_id, f, caption=f"Улучшено до {res_label} {fps_label}")
+            finally:
+                if os.path.exists(tmp_in_path):
+                    os.unlink(tmp_in_path)
+                if os.path.exists(tmp_out_path):
+                    os.unlink(tmp_out_path)
 
     except Exception as e:
-        print(f"[DEBUG] yt-dlp error: {e}")
-        traceback.print_exc()
-
-    if is_youtube(url):
-        print(f"[DEBUG] Retrying YouTube with android fallback...")
+        print(f"[ERROR] {traceback.format_exc()}")
         try:
-            retry_opts = get_ydl_opts_for_url(url, audio_only=False)
-            retry_opts['extractor_args'] = {
-                'youtube': {'player_client': ['android']},
-            }
-            retry_opts['format'] = 'best[ext=mp4]/best'
-            with yt_dlp.YoutubeDL(retry_opts) as ydl:
-                info = ydl.extract_info(url, download=True)
-                video_id = info.get('id', '')
-                files = globmod.glob(f'{DOWNLOAD_DIR}/{video_id}.*')
-                files = [f for f in files if not f.endswith('.part')]
-                filename = files[0] if files else None
-
-                if not filename or not os.path.exists(filename):
-                    all_files = [f for f in globmod.glob(f'{DOWNLOAD_DIR}/*')
-                                if not f.endswith('.part') and not f.endswith('.json')
-                                and os.path.basename(f) != 'url_cache.json']
-                    if all_files:
-                        filename = max(all_files, key=os.path.getmtime)
-
-                if filename and os.path.exists(filename):
-                    save_url_cache(video_id, url)
-                    keyboard = types.InlineKeyboardMarkup()
-                    keyboard.add(types.InlineKeyboardButton(
-                        text="🎵 Скачать аудио (MP3)",
-                        callback_data=f"audio|{video_id}"
-                    ))
-                    with open(filename, 'rb') as video:
-                        bot.send_video(message.chat.id, video, reply_markup=keyboard, caption="Вот твоё видео!")
-                    bot.delete_message(status_msg.chat.id, status_msg.message_id)
-                    os.remove(filename)
-                    return
-        except Exception as e2:
-            print(f"[DEBUG] YouTube retry error: {e2}")
-            traceback.print_exc()
-
-    if is_instagram(url):
-        print(f"[DEBUG] Trying Instagram direct API...")
-        try:
-            bot.edit_message_text("🔄 Пробую альтернативный способ...", chat_id=status_msg.chat.id, message_id=status_msg.message_id)
-            filename, image_url, error = download_ig_direct(url)
-            if filename and os.path.exists(filename):
-                video_id = os.path.basename(filename).replace('.mp4', '')
-                keyboard = types.InlineKeyboardMarkup()
-                keyboard.add(types.InlineKeyboardButton(
-                    text="🎵 Скачать аудио (MP3)",
-                    callback_data=f"audio|{video_id}"
-                ))
-                with open(filename, 'rb') as video:
-                    bot.send_video(message.chat.id, video, reply_markup=keyboard, caption="Вот твоё видео!")
-                bot.delete_message(status_msg.chat.id, status_msg.message_id)
-                os.remove(filename)
-                return
-            if image_url:
-                bot.send_photo(message.chat.id, image_url)
-                bot.delete_message(status_msg.chat.id, status_msg.message_id)
-                return
-            bot.edit_message_text(f"❌ {error or 'Не удалось скачать.'}", chat_id=status_msg.chat.id, message_id=status_msg.message_id)
-        except Exception as e2:
-            print(traceback.format_exc())
-            try:
-                bot.edit_message_text("❌ Ошибка. Возможно контент приватный.", chat_id=status_msg.chat.id, message_id=status_msg.message_id)
-            except:
-                pass
-    else:
-        try:
-            bot.edit_message_text("❌ Ошибка. Возможно контент приватный.", chat_id=status_msg.chat.id, message_id=status_msg.message_id)
+            bot.edit_message_text(f"Ошибка: {str(e)[:300]}", status_msg.chat.id, status_msg.message_id)
         except:
-            pass
+            bot.send_message(chat_id, f"Ошибка: {str(e)[:300]}")
 
-@bot.callback_query_handler(func=lambda call: call.data.startswith('audio|'))
-def handle_audio_callback(call):
-    video_id = call.data.split('|', 1)[1]
 
-    if not video_id or len(video_id) < 3:
-        bot.answer_callback_query(call.id, "❌ Некорректный ID.")
+@bot.message_handler(content_types=["photo"])
+def handle_photo(message):
+    state = user_states.get(message.chat.id)
+    if not state or state.get("mode") != "photo":
+        if message.photo:
+            bot.reply_to(message, "Сначала нажми /start и выбери режим обработки.")
         return
 
-    bot.answer_callback_query(call.id, "⏳ Извлекаю аудио...")
-    cleanup_dir()
+    file_id = message.photo[-1].file_id
+    file_bytes, _ = get_file_from_telegram(bot, file_id)
+    handle_media_processing(message, file_bytes, is_video=False)
 
-    # Get original URL from cache
-    original_url = get_cached_url(video_id)
 
-    # Try YouTube first
-    try:
-        yt_url = f"https://www.youtube.com/watch?v={video_id}"
-        ydl_opts = get_ydl_opts_for_url(yt_url, audio_only=True)
-        ydl_opts['outtmpl'] = f'{DOWNLOAD_DIR}/audio_{video_id}.%(ext)s'
+@bot.message_handler(content_types=["video"])
+def handle_video(message):
+    state = user_states.get(message.chat.id)
+    if not state or state.get("mode") != "video":
+        bot.reply_to(message, "Сначала нажми /start и выбери режим обработки.")
+        return
 
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            ydl.extract_info(yt_url, download=True)
+    file_id = message.video.file_id
+    file_bytes, _ = get_file_from_telegram(bot, file_id)
+    handle_media_processing(message, file_bytes, is_video=True)
 
-        mp3_files = globmod.glob(f'{DOWNLOAD_DIR}/audio_{video_id}.*')
-        if not mp3_files:
-            mp3_files = globmod.glob(f'{DOWNLOAD_DIR}/*.mp3')
 
-        if mp3_files:
-            with open(mp3_files[0], 'rb') as audio:
-                bot.send_audio(call.message.chat.id, audio, caption="🎵 Вот твоя аудиодорожка!")
-            os.remove(mp3_files[0])
-            return
-    except Exception:
-        pass
+@bot.message_handler(content_types=["document"])
+def handle_document(message):
+    if not message.document or not message.document.mime_type:
+        return
+    mime = message.document.mime_type
+    is_video = mime.startswith("video/")
+    is_image = mime.startswith("image/")
 
-    # Try cached original URL
-    if original_url:
+    if not is_video and not is_image:
+        return
+
+    state = user_states.get(message.chat.id)
+    if not state or state.get("mode") is None:
+        bot.reply_to(message, "Сначала нажми /start и выбери режим обработки.")
+        return
+
+    if state["mode"] == "photo" and not is_image:
+        bot.reply_to(message, "Ты выбрал режим фото, но отправил видео. Нажми /start заново.")
+        return
+    if state["mode"] == "video" and not is_video:
+        bot.reply_to(message, "Ты выбрал режим видео, но отправил фото. Нажми /start заново.")
+        return
+
+    file_id = message.document.file_id
+    file_bytes, _ = get_file_from_telegram(bot, file_id)
+    handle_media_processing(message, file_bytes, is_video=is_video)
+
+
+@bot.message_handler(func=lambda m: True, content_types=["text"])
+def handle_text(message):
+    bot.reply_to(message, "Отправь фото или видео для обработки.\nНажми /start чтобы начать.")
+
+
+if __name__ == "__main__":
+    import sys
+    print("[QUALITY-BOT] Starting...", flush=True)
+    while True:
         try:
-            ydl_opts = get_ydl_opts_for_url(original_url, audio_only=True)
-            ydl_opts['outtmpl'] = f'{DOWNLOAD_DIR}/audio_{video_id}.%(ext)s'
-
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                ydl.extract_info(original_url, download=True)
-
-            mp3_files = globmod.glob(f'{DOWNLOAD_DIR}/audio_{video_id}.*')
-            if not mp3_files:
-                mp3_files = globmod.glob(f'{DOWNLOAD_DIR}/*.mp3')
-
-            if mp3_files:
-                with open(mp3_files[0], 'rb') as audio:
-                    bot.send_audio(call.message.chat.id, audio, caption="🎵 Вот твоя аудиодорожка!")
-                os.remove(mp3_files[0])
-                return
-        except Exception:
-            pass
-
-    # Try TikTok fallback
-    try:
-        tiktok_url = f"https://www.tiktok.com/video/{video_id}"
-        ydl_opts = get_ydl_opts_for_url(tiktok_url, audio_only=True)
-        ydl_opts['outtmpl'] = f'{DOWNLOAD_DIR}/audio_{video_id}.%(ext)s'
-
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            ydl.extract_info(tiktok_url, download=True)
-
-        mp3_files = globmod.glob(f'{DOWNLOAD_DIR}/audio_{video_id}.*')
-        if not mp3_files:
-            mp3_files = globmod.glob(f'{DOWNLOAD_DIR}/*.mp3')
-
-        if mp3_files:
-            with open(mp3_files[0], 'rb') as audio:
-                bot.send_audio(call.message.chat.id, audio, caption="🎵 Вот твоя аудиодорожка!")
-            os.remove(mp3_files[0])
-            return
-    except Exception:
-        pass
-
-    # Try Instagram direct API
-    try:
-        filename, image_url, error = download_ig_direct(f'https://www.instagram.com/reel/{video_id}/')
-        if filename and os.path.exists(filename):
-            import subprocess
-            mp3_path = f'{DOWNLOAD_DIR}/audio_{video_id}.mp3'
-            subprocess.run([
-                'ffmpeg', '-i', filename, '-vn', '-acodec', 'libmp3lame',
-                '-q:a', '2', '-y', mp3_path
-            ], capture_output=True, timeout=30)
-
-            if os.path.exists(mp3_path):
-                with open(mp3_path, 'rb') as audio:
-                    bot.send_audio(call.message.chat.id, audio, caption="🎵 Вот твоя аудиодорожка!")
-                os.remove(mp3_path)
-                os.remove(filename)
-                return
-            else:
-                os.remove(filename)
-    except Exception:
-        pass
-
-    bot.send_message(call.message.chat.id, "❌ Ошибка при конвертации в MP3.")
-
-if __name__ == '__main__':
-    print("[BOT] Starting bot...")
-    print(f"[BOT] Python: {__import__('sys').version}")
-    print(f"[BOT] yt-dlp: {__import__('yt_dlp').version.__version__}")
-    bot.polling(none_stop=True)
+            bot.polling(none_stop=True, timeout=60, long_polling_timeout=60)
+        except Exception as e:
+            print(f"[ERROR] {e}, restarting in 5s...", flush=True)
+            time.sleep(5)
