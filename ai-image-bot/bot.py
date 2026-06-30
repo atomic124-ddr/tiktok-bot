@@ -6,7 +6,6 @@ import subprocess
 import tempfile
 import cv2
 import numpy as np
-from PIL import Image
 import telebot
 from telebot import types
 
