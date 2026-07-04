@@ -154,6 +154,52 @@ def download_ig_direct(url):
         return None, images[0]['url'], None
     return None, None, "Unsupported media type"
 
+
+# ===================== NOVAYA FUNKTSIYA: TikTok slideshow images =====================
+
+def get_tiktok_slideshow_images(url):
+    """Poluchayet spisok URL fotografiy iz TikTok-slaidshou posta."""
+    try:
+        print(f"[DEBUG] TikTok slideshow: trying tikwm API for {url}")
+        api_url = "https://www.tikwm.com/api/"
+        params = {
+            "url": url,
+            "count": 12,
+            "cursor": 0,
+            "web": 1,
+            "hd": 1,
+        }
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36',
+            'Accept': 'application/json',
+        }
+        r = http_requests.get(api_url, params=params, headers=headers, timeout=20)
+        print(f"[DEBUG] TikTok slideshow: tikwm status={r.status_code}")
+        if r.status_code == 200:
+            data = r.json()
+            if data.get('code') == 0:
+                item = data.get('data', {})
+                images = item.get('images', [])
+                if images:
+                    urls = [img.get('url') for img in images if img.get('url')]
+                    print(f"[DEBUG] TikTok slideshow: found {len(urls)} images")
+                    return urls
+                else:
+                    print(f"[DEBUG] TikTok slideshow: no images in response (likely a video)")
+                    return None
+            else:
+                print(f"[DEBUG] TikTok slideshow: tikwm API error: {data.get('msg')}")
+                return None
+        else:
+            print(f"[DEBUG] TikTok slideshow: tikwm HTTP error {r.status_code}")
+            return None
+    except Exception as e:
+        print(f"[DEBUG] TikTok slideshow: exception: {e}")
+        return None
+
+# ===================== END NOVAYA FUNKTSIYA ========================================
+
+
 def get_ydl_opts_for_url(url, audio_only=False):
     opts = {**BASE_YDL_OPTS}
 
@@ -235,6 +281,25 @@ def handle_link(message):
 
     status_msg = bot.reply_to(message, "⏳ Обрабатываю ссылку...")
     cleanup_dir()
+
+    # ===================== PROVERKA SLIDESHOW DLYA TIKTOK =====================
+    if is_tiktok(url):
+        print(f"[DEBUG] TikTok detected, checking for slideshow images...")
+        slideshow_images = get_tiktok_slideshow_images(url)
+        if slideshow_images:
+            print(f"[DEBUG] Slideshow detected! Sending {len(slideshow_images)} images...")
+            try:
+                # Telegram podderzhivaet do 10 fotografii v media gruppakh
+                media_group = [types.InputMediaPhoto(img_url) for img_url in slideshow_images[:10]]
+                bot.send_media_group(message.chat.id, media_group)
+                bot.delete_message(status_msg.chat.id, status_msg.message_id)
+                return
+            except Exception as e:
+                print(f"[DEBUG] Slideshow send error: {e}")
+                # Prodolzhaem k obychnomu download cherez yt-dlp
+        else:
+            print(f"[DEBUG] Not a slideshow, proceeding to yt-dlp download...")
+    # ===================== END PROVERKA SLIDESHOW =================================
 
     ydl_opts = get_ydl_opts_for_url(url, audio_only=False)
     print(f"[DEBUG] ydl_opts: {ydl_opts}")
